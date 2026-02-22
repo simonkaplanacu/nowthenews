@@ -1,0 +1,27 @@
+{
+  "guardian": {
+    "base_url": "https://content.guardianapis.com",
+    "rate_limit_interval_seconds": 1.0,
+    "daily_request_limit": 500,
+    "show_fields": "headline,standfirst,body,byline,wordcount,thumbnail,shortUrl,lang",
+    "show_tags": "keyword",
+    "page_size": 200,
+    "timeout_seconds": 30,
+    "max_retries": 3
+  },
+  "clickhouse": {
+    "database": "news"
+  },
+  "ollama": {
+    "num_ctx": 8192
+  },
+  "ingestion": {
+    "batch_size": 200
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/newschat.log",
+    "max_bytes": 10485760,
+    "backup_count": 5
+  }
+}
