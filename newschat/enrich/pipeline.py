@@ -27,7 +27,7 @@ def _unenriched_ids(ch_client, limit: int, model: str) -> list[tuple[str, str, s
             SELECT article_id FROM {_DB}.article_enrichment
             WHERE model_used = %(model)s AND prompt_version = %(pv)s
         ) e ON a.article_id = e.article_id
-        ORDER BY a.published_at
+        ORDER BY a.published_at, a.article_id
         LIMIT %(limit)s
     """
     result = ch_client.query(
@@ -113,16 +113,19 @@ def enrich(
     Returns:
         Summary dict with counts.
     """
-    model = model or ENRICH_MODEL
-    limit = limit or ENRICH_BATCH_SIZE
+    model = model if model is not None else ENRICH_MODEL
+    limit = limit if limit is not None else ENRICH_BATCH_SIZE
 
-    ch = get_ch_client()
-    llm = OllamaClient(model=model)
+    ch = None
+    llm = None
 
     enriched = 0
     failed = 0
 
     try:
+        ch = get_ch_client()
+        llm = OllamaClient(model=model)
+
         if not llm.check_health():
             raise RuntimeError(
                 f"Ollama not reachable or model '{model}' not available at {llm.host}"
@@ -163,8 +166,10 @@ def enrich(
     else:
         _log_enrichment(ch, model, enriched + failed, enriched, failed, "ok")
     finally:
-        llm.close()
-        ch.close()
+        if llm is not None:
+            llm.close()
+        if ch is not None:
+            ch.close()
 
     summary = {
         "model": model,

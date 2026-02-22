@@ -13,6 +13,7 @@ from newschat.config import (
     LOG_LEVEL,
     LOG_MAX_BYTES,
 )
+from newschat.db import init_schema
 from newschat.enrich.pipeline import enrich
 
 
@@ -52,9 +53,17 @@ def main():
         default=None,
         help="Max articles to process this run",
     )
+    parser.add_argument(
+        "--init-db",
+        action="store_true",
+        help="Create database and tables before enriching",
+    )
     args = parser.parse_args()
 
     setup_logging()
+
+    if args.init_db:
+        init_schema()
 
     result = enrich(model=args.model, limit=args.limit)
     print(

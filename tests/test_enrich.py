@@ -2,6 +2,9 @@
 
 import json
 
+import pytest
+from pydantic import ValidationError
+
 from newschat.enrich.prompt import PROMPT_VERSION, SYSTEM_PROMPT, build_user_prompt
 from newschat.enrich.schema import EnrichmentResult, Entity, PolicyDomain, Quote, SmokeTerm
 
@@ -93,6 +96,20 @@ def test_event_date_nullable():
     data["event_date"] = None
     result = EnrichmentResult.model_validate(data)
     assert result.event_date is None
+
+
+def test_invalid_sentiment_rejected():
+    data = _sample_result()
+    data["sentiment"] = "somewhat negative"
+    with pytest.raises(ValidationError):
+        EnrichmentResult.model_validate(data)
+
+
+def test_invalid_entity_type_rejected():
+    data = _sample_result()
+    data["entities"] = [{"name": "NHS", "type": "company"}]
+    with pytest.raises(ValidationError):
+        EnrichmentResult.model_validate(data)
 
 
 def test_json_schema_generation():

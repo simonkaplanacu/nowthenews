@@ -13,6 +13,10 @@ LOG_DIR="${PROJECT_DIR}/logs"
 
 mkdir -p "$PID_DIR" "$LOG_DIR" "$DATA_DIR"/{loki,promtail}
 
+# Loki and Promtail configs use relative paths (./logs, ./data) so we
+# must run from the project root.
+cd "$PROJECT_DIR"
+
 # ---------- helper ----------
 start_if_not_running() {
     local name="$1" pidfile="$PID_DIR/${name}.pid"

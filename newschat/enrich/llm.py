@@ -25,7 +25,9 @@ class OllamaClient:
         self.model = model
         self.host = (host or OLLAMA_HOST).rstrip("/")
         self.num_ctx = num_ctx or OLLAMA_NUM_CTX
-        self._http = httpx.Client(timeout=300)
+        self._http = httpx.Client(
+            timeout=httpx.Timeout(connect=10, read=300, write=30, pool=10)
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -46,9 +48,14 @@ class OllamaClient:
         try:
             resp = self._http.get(f"{self.host}/api/tags")
             resp.raise_for_status()
-            models = {m["name"] for m in resp.json().get("models", [])}
-            # Ollama may list with or without :latest tag
-            return self.model in models or f"{self.model}:latest" in models
+            available = set()
+            for m in resp.json().get("models", []):
+                name = m["name"]
+                available.add(name)
+                # Strip :latest so "qwen3:30b-a3b:latest" also matches "qwen3:30b-a3b"
+                if name.endswith(":latest"):
+                    available.add(name[: -len(":latest")])
+            return self.model in available
         except Exception:
             return False
 

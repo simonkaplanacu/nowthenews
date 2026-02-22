@@ -41,7 +41,7 @@ download_and_extract() {
     if [[ "$url" == *.zip ]]; then
         curl -fsSL "$url" -o "$tmp/archive.zip"
         unzip -q "$tmp/archive.zip" -d "$tmp"
-        mv "$tmp/${name}-${OS}-${ARCH_SUFFIX}" "$dest" 2>/dev/null || mv "$tmp/$name" "$dest" 2>/dev/null || true
+        mv "$tmp/${name}-${OS}-${ARCH_SUFFIX}" "$dest" 2>/dev/null || mv "$tmp/$name" "$dest"
     else
         curl -fsSL "$url" -o "$tmp/archive.gz"
         gunzip "$tmp/archive.gz"
