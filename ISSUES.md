@@ -1,6 +1,6 @@
 # Code Review Issues
 
-39 distinct issues identified during review.
+38 distinct issues identified during review.
 
 ## A. Configuration
 
@@ -88,6 +88,4 @@
 
 37. **No tests exist** (`pyproject.toml:15`) — dev dependencies include `pytest` and `pytest-asyncio`, but there are zero test files in the project. `pytest-asyncio` is doubly dead since there's no async code either.
 
-38. **`fastmcp` optional dependency declared for nonexistent code** (`pyproject.toml:14`) — the MCP server optional dependency group is declared but no MCP server module exists. The `enrich/` module is an empty `__init__.py`.
-
-39. **Tags use untyped `list[dict]`** (`guardian.py:38`) — the tag structure has keys `tag_id`, `tag_title`, `tag_type` but no TypedDict or dataclass. Misspelling a key produces no static warning; it fails at runtime during ClickHouse insert.
+38. **Tags use untyped `list[dict]`** (`guardian.py:38`) — the tag structure has keys `tag_id`, `tag_title`, `tag_type` but no TypedDict or dataclass. Misspelling a key produces no static warning; it fails at runtime during ClickHouse insert.
