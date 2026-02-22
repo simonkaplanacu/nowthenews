@@ -11,17 +11,21 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_DIR"
 
-# ---------- check clickhouse binary ----------
-if ! command -v clickhouse &>/dev/null; then
+# ---------- find clickhouse binary ----------
+# Prefer the project-local binary (installed via official script) over system PATH,
+# since the Homebrew Cask version is broken on macOS (unsigned binary).
+if [ -x "$PROJECT_DIR/bin/clickhouse" ]; then
+    CLICKHOUSE="$PROJECT_DIR/bin/clickhouse"
+elif command -v clickhouse &>/dev/null; then
+    CLICKHOUSE="$(command -v clickhouse)"
+else
     echo "Error: clickhouse binary not found."
-    echo "Install it first:  ./scripts/setup_all.sh"
+    echo "Install it:  curl -fsSL https://clickhouse.com/install.sh | sh && mkdir -p bin && mv clickhouse bin/"
     exit 1
 fi
 
 # ---------- check macOS quarantine ----------
-CH_BIN="$(command -v clickhouse)"
-# resolve symlinks to check the actual binary
-CH_REAL="$(readlink "$CH_BIN" 2>/dev/null || echo "$CH_BIN")"
+CH_REAL="$(realpath "$CLICKHOUSE" 2>/dev/null || echo "$CLICKHOUSE")"
 if [[ "$OSTYPE" == darwin* ]] && xattr "$CH_REAL" 2>/dev/null | grep -q com.apple.quarantine; then
     echo "Error: clickhouse binary is quarantined by macOS and will not run."
     echo "Fix it with:  xattr -d com.apple.quarantine $CH_REAL"
@@ -34,7 +38,7 @@ if curl -sf http://localhost:8123/ping &>/dev/null; then
     echo "  Already running"
 else
     echo "  Starting ClickHouse..."
-    clickhouse server >/dev/null 2>&1 &
+    "$CLICKHOUSE" server >/dev/null 2>&1 &
 
     # Wait up to 15 seconds for readiness
     for i in $(seq 1 15); do
