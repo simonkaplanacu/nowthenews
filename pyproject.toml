@@ -1,0 +1,15 @@
+[project]
+name = "newschat"
+version = "0.1.0"
+description = "News ingestion, enrichment, and query system"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx",
+    "clickhouse-connect",
+    "python-dotenv",
+    "beautifulsoup4",
+]
+
+[project.optional-dependencies]
+mcp = ["fastmcp"]
+dev = ["pytest", "pytest-asyncio"]
