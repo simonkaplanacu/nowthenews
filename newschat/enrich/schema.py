@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+ENTITY_TYPES = Literal[
+    "person", "organisation", "place", "event", "legislation", "statistic"
+]
+SENTIMENT_VALUES = Literal["positive", "negative", "neutral", "mixed"]
 
 
 class Entity(BaseModel):
     name: str = Field(description="Entity name as it appears (or normalised)")
-    type: str = Field(
-        description="Entity type: person, organisation, place, event, legislation, statistic"
-    )
+    type: ENTITY_TYPES = Field(description="Entity type")
 
 
 class PolicyDomain(BaseModel):
@@ -34,7 +39,7 @@ class EnrichmentResult(BaseModel):
 
     entities: list[Entity] = Field(default_factory=list)
     policy_domains: list[PolicyDomain] = Field(default_factory=list)
-    sentiment: str = Field(description="One of: positive, negative, neutral, mixed")
+    sentiment: SENTIMENT_VALUES = Field(description="Overall tone")
     sentiment_score: float = Field(
         ge=-1.0, le=1.0, description="Sentiment score from -1 (negative) to 1 (positive)"
     )
