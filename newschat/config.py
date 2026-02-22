@@ -54,6 +54,13 @@ OLLAMA_HOST = os.environ.get(
 )
 OLLAMA_NUM_CTX = _ollama.get("num_ctx", 8192)
 
+# --- Enrichment ---
+_enrichment = _cfg.get("enrichment", {})
+ENRICH_MODEL = os.environ.get(
+    "ENRICH_MODEL", _enrichment.get("model", "qwen3:30b-a3b")
+)
+ENRICH_BATCH_SIZE = _enrichment.get("batch_size", 50)
+
 # --- Ingestion ---
 _ingestion = _cfg.get("ingestion", {})
 INGEST_BATCH_SIZE = _ingestion.get("batch_size", 200)
