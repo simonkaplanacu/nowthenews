@@ -43,7 +43,7 @@ GUARDIAN_MAX_RETRIES = _guardian.get("max_retries", 3)
 _clickhouse = _cfg.get("clickhouse", {})
 CLICKHOUSE_DSN = os.environ.get(
     "CLICKHOUSE_DSN",
-    _clickhouse.get("dsn", "clickhouse://localhost:9000"),
+    _clickhouse.get("dsn", "clickhouse://localhost:8123"),
 )
 CLICKHOUSE_DATABASE = _clickhouse.get("database", "news")
 
