@@ -1,6 +1,6 @@
 # Code Review Issues
 
-38 distinct issues identified during review.
+40 distinct issues identified during review.
 
 ## A. Configuration
 
@@ -89,3 +89,9 @@
 37. **No tests exist** (`pyproject.toml:15`) — dev dependencies include `pytest` and `pytest-asyncio`, but there are zero test files in the project. `pytest-asyncio` is doubly dead since there's no async code either.
 
 38. **Tags use untyped `list[dict]`** (`guardian.py:38`) — the tag structure has keys `tag_id`, `tag_title`, `tag_type` but no TypedDict or dataclass. Misspelling a key produces no static warning; it fails at runtime during ClickHouse insert.
+
+## G. Observability
+
+39. **Logging goes to stderr only — no file output** (`ingest_once.py:11-14`, `setup_db.py:7-9`) — both scripts use `logging.basicConfig()` with no file handler, no rotation, no persistence. Logs from long-running ingestion are lost unless stderr is externally captured.
+
+40. **Sort key puts `id` last — article lookups by ID require a full table scan** (`db.py:30`) — `ORDER BY (source, published_at, id)` means ClickHouse can only use the primary index efficiently when filtering by source first, then published_at. Enrichment will need to look up articles by ID, and without source and published_at in the query, that's a scan of the entire table.
