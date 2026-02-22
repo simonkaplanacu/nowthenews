@@ -18,13 +18,23 @@ if ! command -v clickhouse &>/dev/null; then
     exit 1
 fi
 
+# ---------- check macOS quarantine ----------
+CH_BIN="$(command -v clickhouse)"
+# resolve symlinks to check the actual binary
+CH_REAL="$(readlink "$CH_BIN" 2>/dev/null || echo "$CH_BIN")"
+if [[ "$OSTYPE" == darwin* ]] && xattr "$CH_REAL" 2>/dev/null | grep -q com.apple.quarantine; then
+    echo "Error: clickhouse binary is quarantined by macOS and will not run."
+    echo "Fix it with:  xattr -d com.apple.quarantine $CH_REAL"
+    exit 1
+fi
+
 # ---------- start clickhouse if needed ----------
 echo "=== ClickHouse ==="
 if curl -sf http://localhost:8123/ping &>/dev/null; then
     echo "  Already running"
 else
     echo "  Starting ClickHouse..."
-    clickhouse server --daemon
+    clickhouse server >/dev/null 2>&1 &
 
     # Wait up to 15 seconds for readiness
     for i in $(seq 1 15); do
