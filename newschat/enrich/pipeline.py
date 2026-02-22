@@ -156,6 +156,12 @@ def enrich(
                 failed += 1
                 log.exception("Failed to enrich %s", article_id)
 
+    except Exception:
+        log.exception("Enrichment run failed")
+        _log_enrichment(ch, model, enriched + failed, enriched, failed, "error")
+        raise
+    else:
+        _log_enrichment(ch, model, enriched + failed, enriched, failed, "ok")
     finally:
         llm.close()
         ch.close()
@@ -169,3 +175,27 @@ def enrich(
     }
     log.info("Enrichment complete: %s", summary)
     return summary
+
+
+def _log_enrichment(
+    ch_client,
+    model: str,
+    attempted: int,
+    enriched: int,
+    failed: int,
+    status: str,
+) -> None:
+    """Write an audit row to enrichment_log. Swallows exceptions."""
+    try:
+        ch_client.insert(
+            f"{_DB}.enrichment_log",
+            [[model, PROMPT_VERSION, datetime.now(timezone.utc),
+              attempted, enriched, failed, status]],
+            column_names=[
+                "model", "prompt_version", "run_at",
+                "articles_attempted", "articles_enriched",
+                "articles_failed", "status",
+            ],
+        )
+    except Exception:
+        log.exception("Failed to write enrichment log entry")

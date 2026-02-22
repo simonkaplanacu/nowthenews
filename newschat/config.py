@@ -52,7 +52,7 @@ _ollama = _cfg.get("ollama", {})
 OLLAMA_HOST = os.environ.get(
     "OLLAMA_HOST", _ollama.get("host", "http://localhost:11434")
 )
-OLLAMA_NUM_CTX = _ollama.get("num_ctx", 8192)
+OLLAMA_NUM_CTX = _ollama.get("num_ctx", 32768)
 
 # --- Enrichment ---
 _enrichment = _cfg.get("enrichment", {})

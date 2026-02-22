@@ -49,7 +49,11 @@ if command -v clickhouse-server &>/dev/null; then
     echo "  ClickHouse already installed"
 else
     echo "  Installing ClickHouse..."
-    curl https://clickhouse.com/ | sh
+    curl -fsSL https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml &>/dev/null \
+        && echo "  (RPM-based system detected)" \
+        || true
+    # Official install script from ClickHouse docs
+    curl -fsSL https://clickhouse.com/install.sh | sh
     echo "  ClickHouse installed"
 fi
 echo "  Creating schema..."
@@ -59,7 +63,11 @@ echo "  Database schema ready"
 # ---------- ollama + models ----------
 echo ""
 echo "=== Ollama + models ==="
-bash scripts/setup_ollama.sh "${EXTRA_MODELS[@]}"
+if [ ${#EXTRA_MODELS[@]} -gt 0 ]; then
+    bash scripts/setup_ollama.sh "${EXTRA_MODELS[@]}"
+else
+    bash scripts/setup_ollama.sh
+fi
 
 # ---------- observability ----------
 echo ""

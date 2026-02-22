@@ -13,7 +13,7 @@
     "database": "news"
   },
   "ollama": {
-    "num_ctx": 8192
+    "num_ctx": 32768
   },
   "enrichment": {
     "model": "qwen3:30b-a3b",

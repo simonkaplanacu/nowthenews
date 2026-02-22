@@ -52,7 +52,17 @@ ORDER BY (article_id, tag_id)""",
     model_used          LowCardinality(String),
     prompt_version      LowCardinality(String)
 ) ENGINE = ReplacingMergeTree(enriched_at)
-ORDER BY (article_id, enriched_at)""",
+ORDER BY (article_id, model_used, prompt_version)""",
+    f"""CREATE TABLE IF NOT EXISTS {_DB}.enrichment_log (
+    model               LowCardinality(String),
+    prompt_version      LowCardinality(String),
+    run_at              DateTime('UTC') DEFAULT now(),
+    articles_attempted  UInt32,
+    articles_enriched   UInt32,
+    articles_failed     UInt32,
+    status              LowCardinality(String)
+) ENGINE = MergeTree()
+ORDER BY (model, run_at)""",
     f"""CREATE TABLE IF NOT EXISTS {_DB}.ingestion_log (
     source          LowCardinality(String),
     run_at          DateTime('UTC') DEFAULT now(),
