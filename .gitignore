@@ -7,3 +7,11 @@ dist/
 logs/
 bin/
 data/
+
+# ClickHouse data directories (created at server start)
+access/
+metadata/
+preprocessed_configs/
+status
+store/
+uuid
