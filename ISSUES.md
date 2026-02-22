@@ -1,6 +1,6 @@
 # Code Review Issues
 
-33 distinct issues identified during review.
+39 distinct issues identified during review.
 
 ## A. Configuration
 
@@ -77,3 +77,17 @@
 32. **No per-article error handling** (`guardian.py:154`) — one malformed article in a page of 200 crashes the list comprehension, losing the entire page and killing the run.
 
 33. **No connectivity check before starting** — a long backfill can fetch hundreds of API pages before discovering ClickHouse is unreachable at the first insert attempt.
+
+## F. Testability and Project Setup
+
+34. **`GuardianClient.base_url` is not parameterized** (`guardian.py:97`) — `api_key` is a constructor parameter with a default, so it can be overridden. `base_url` is not — it's always `GUARDIAN_BASE_URL`. Can't point the client at a mock server for testing without monkeypatching the module constant.
+
+35. **Bare key access on API response envelope** (`guardian.py:152,155`) — `data["response"]`, `response["total"]`, `response["pages"]` all `KeyError` if the Guardian API returns an error body with a different structure. Distinct from #16 (article-level fields) — this is the response envelope itself.
+
+36. **Package name doesn't match repo name** (`pyproject.toml:2`) — the installable package is `newschat`, the repository is `nowthenews`. Anyone looking at one won't find the other.
+
+37. **No tests exist** (`pyproject.toml:15`) — dev dependencies include `pytest` and `pytest-asyncio`, but there are zero test files in the project. `pytest-asyncio` is doubly dead since there's no async code either.
+
+38. **`fastmcp` optional dependency declared for nonexistent code** (`pyproject.toml:14`) — the MCP server optional dependency group is declared but no MCP server module exists. The `enrich/` module is an empty `__init__.py`.
+
+39. **Tags use untyped `list[dict]`** (`guardian.py:38`) — the tag structure has keys `tag_id`, `tag_title`, `tag_type` but no TypedDict or dataclass. Misspelling a key produces no static warning; it fails at runtime during ClickHouse insert.
