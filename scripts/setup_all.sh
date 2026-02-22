@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Full bootstrap: Python deps, ClickHouse schema, Ollama + models, observability stack.
+# Full bootstrap: Python deps, ClickHouse schema, Ollama + models, observability.
+# Everything runs natively — no Docker.
 #
 # Usage:
 #   ./scripts/setup_all.sh                       # default setup
@@ -32,41 +33,45 @@ done
 # ---------- python dependencies ----------
 echo "=== Python dependencies ==="
 if [ -d ".venv" ]; then
-    echo "✓ Virtual environment exists"
+    echo "  Virtual environment exists"
 else
     python3 -m venv .venv
-    echo "✓ Created virtual environment"
+    echo "  Created virtual environment"
 fi
 source .venv/bin/activate
 pip install -q -e ".[dev]"
-echo "✓ Python packages installed"
+echo "  Python packages installed"
 
-# ---------- clickhouse schema ----------
+# ---------- clickhouse ----------
 echo ""
-echo "=== ClickHouse schema ==="
+echo "=== ClickHouse ==="
+if command -v clickhouse-server &>/dev/null; then
+    echo "  ClickHouse already installed"
+else
+    echo "  Installing ClickHouse..."
+    curl https://clickhouse.com/ | sh
+    echo "  ClickHouse installed"
+fi
+echo "  Creating schema..."
 python scripts/setup_db.py
-echo "✓ Database schema ready"
+echo "  Database schema ready"
 
 # ---------- ollama + models ----------
 echo ""
 echo "=== Ollama + models ==="
 bash scripts/setup_ollama.sh "${EXTRA_MODELS[@]}"
 
-# ---------- observability (docker) ----------
+# ---------- observability ----------
 echo ""
-echo "=== Observability stack ==="
-if command -v docker &>/dev/null && command -v docker-compose &>/dev/null || docker compose version &>/dev/null 2>&1; then
-    docker compose -f docker-compose.observability.yml up -d
-    echo "✓ Loki + Grafana + Promtail running"
-    echo "  Grafana: http://localhost:3000 (admin/admin)"
-    echo "  Loki:    http://localhost:3100"
-else
-    echo "⚠ Docker not found — skipping observability stack."
-    echo "  Install Docker and run: docker compose -f docker-compose.observability.yml up -d"
-fi
+echo "=== Observability (Loki + Promtail + Grafana) ==="
+bash scripts/setup_observability.sh
 
 echo ""
 echo "=== Setup complete ==="
+echo ""
+echo "  Start observability:  ./scripts/start_observability.sh"
+echo "  Stop observability:   ./scripts/stop_observability.sh"
+echo ""
 echo "  Ingest:  python scripts/ingest_once.py --from-date 2024-01-01 --to-date 2024-01-31"
 echo "  Enrich:  python scripts/enrich_once.py --limit 10"
-echo "  Logs:    http://localhost:3000 (Grafana → Explore → Loki)"
+echo "  Logs:    http://localhost:3000 (Grafana -> Explore -> Loki)"

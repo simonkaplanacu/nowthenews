@@ -3,10 +3,10 @@ server:
   http_listen_port: 9080
 
 positions:
-  filename: /tmp/positions.yaml
+  filename: ./data/observability/promtail/positions.yaml
 
 clients:
-  - url: http://loki:3100/loki/api/v1/push
+  - url: http://localhost:3100/loki/api/v1/push
 
 scrape_configs:
   - job_name: newschat
@@ -15,7 +15,7 @@ scrape_configs:
           - localhost
         labels:
           job: newschat
-          __path__: /var/log/newschat/*.log
+          __path__: ./logs/*.log
     pipeline_stages:
       # Parse the standard Python log format:
       # 2024-01-15 10:30:00,123 INFO newschat.ingest.loader: message
