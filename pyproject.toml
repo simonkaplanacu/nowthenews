@@ -16,6 +16,9 @@ dependencies = [
 mcp = ["fastmcp>=0.1"]
 dev = ["pytest>=8,<9"]
 
+[project.scripts]
+newschat-mcp = "newschat.mcp.server:main"
+
 [tool.setuptools.packages.find]
 include = ["newschat*"]
 
