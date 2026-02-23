@@ -16,7 +16,7 @@ from decimal import Decimal
 
 from fastmcp import FastMCP
 
-from newschat.config import CLICKHOUSE_DATABASE
+from newschat.config import CLICKHOUSE_DATABASE, MCP_AUTH_TOKEN
 from newschat.db import get_client
 
 _DB = CLICKHOUSE_DATABASE
@@ -433,7 +433,7 @@ def _bearer_middleware():
     from starlette.requests import Request
     from starlette.responses import PlainTextResponse
 
-    token = os.environ["MCP_AUTH_TOKEN"]
+    token = MCP_AUTH_TOKEN
 
     class BearerAuth(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
@@ -452,7 +452,7 @@ def _bearer_middleware():
 
 def main():
     """Start the MCP server on Streamable HTTP."""
-    if not os.environ.get("MCP_AUTH_TOKEN"):
+    if not MCP_AUTH_TOKEN:
         print(
             "Error: MCP_AUTH_TOKEN environment variable is required",
             file=sys.stderr,
