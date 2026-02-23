@@ -65,8 +65,9 @@ def _scalar(sql: str, parameters: dict | None = None):
 mcp = FastMCP(
     "nowthenews",
     instructions=(
-        "Read-only access to Guardian news articles enriched with entities, "
-        "sentiment, policy domains, smoke terms, and quotes."
+        "Read-only access to news articles enriched with entities, sentiment, "
+        "policy domains, smoke terms, quotes, geographic relevance, topics, "
+        "and content type classifications."
     ),
 )
 
@@ -144,7 +145,7 @@ def get_article(article_id: str) -> dict | None:
 
 @mcp.tool()
 def get_enrichment(article_id: str) -> dict | None:
-    """Fetch enrichment data (entities, sentiment, smoke terms, quotes) for an article.
+    """Fetch enrichment data (entities, sentiment, smoke terms, quotes, content type) for an article.
 
     Args:
         article_id: The article identifier
@@ -153,7 +154,7 @@ def get_enrichment(article_id: str) -> dict | None:
         f"""
         SELECT article_id, enriched_at, sentiment, sentiment_score,
                framing_notes, event_signature, event_date, summary,
-               model_used, prompt_version,
+               content_type, model_used, prompt_version,
                entities.name, entities.type,
                policy.domain, policy.score,
                smoke_terms.term, smoke_terms.context, smoke_terms.rationale,
@@ -173,7 +174,7 @@ def get_enrichment(article_id: str) -> dict | None:
         for k in (
             "article_id", "enriched_at", "sentiment", "sentiment_score",
             "framing_notes", "event_signature", "event_date", "summary",
-            "model_used", "prompt_version",
+            "content_type", "model_used", "prompt_version",
         )
     }
     # Rebuild nested arrays from parallel sub-column arrays
@@ -199,6 +200,20 @@ def get_enrichment(article_id: str) -> dict | None:
             row["quotes.quote"],
             row["quotes.speaker"],
             row["quotes.context"],
+        )
+    ]
+    # Fetch geographic relevance and topics from separate tables
+    result["geographic_relevance"] = _query(
+        f"""SELECT region, score FROM {_DB}.article_regions
+        WHERE article_id = {{article_id:String}}
+        ORDER BY score DESC""",
+        {"article_id": article_id},
+    )
+    result["topics"] = [
+        r["topic"] for r in _query(
+            f"""SELECT topic FROM {_DB}.article_topics
+            WHERE article_id = {{article_id:String}}""",
+            {"article_id": article_id},
         )
     ]
     return result
@@ -409,11 +424,179 @@ def find_quotes(
 
 
 @mcp.tool()
+def search_by_region(
+    region: str,
+    min_score: float = 0.3,
+    topic: str | None = None,
+    content_type: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Find articles relevant to a geographic region.
+
+    Args:
+        region: Region code (australia, united_kingdom, united_states, europe,
+                middle_east, asia_pacific, latin_america, africa, global)
+        min_score: Minimum relevance score (0.0-1.0, default 0.3)
+        topic: Optional topic filter (e.g. 'trade', 'domestic_politics')
+        content_type: Optional content type filter (e.g. 'news_report', 'opinion')
+        limit: Max results (1-100, default 20)
+    """
+    limit = max(1, min(limit, 100))
+    conditions = [
+        "r.region = {region:String}",
+        "r.score >= {min_score:Float32}",
+    ]
+    params: dict = {"region": region, "min_score": min_score, "limit": limit}
+    joins = ""
+
+    if topic:
+        joins += (
+            f" JOIN {_DB}.article_topics AS t"
+            " ON t.article_id = r.article_id"
+        )
+        conditions.append("t.topic = {topic:String}")
+        params["topic"] = topic
+
+    if content_type:
+        joins += (
+            f" JOIN {_DB}.article_enrichment AS e FINAL"
+            " ON e.article_id = r.article_id"
+        )
+        conditions.append("e.content_type = {content_type:String}")
+        params["content_type"] = content_type
+
+    sql = f"""
+        SELECT r.article_id, r.region, r.score,
+               a.title, a.published_at, a.section_id, a.url
+        FROM {_DB}.article_regions AS r
+        JOIN {_DB}.articles AS a FINAL ON a.article_id = r.article_id
+        {joins}
+        WHERE {" AND ".join(conditions)}
+        ORDER BY r.score DESC, a.published_at DESC
+        LIMIT {{limit:UInt32}}
+    """
+    return _query(sql, params)
+
+
+@mcp.tool()
+def search_by_topic(
+    topic: str,
+    region: str | None = None,
+    content_type: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Find articles matching a topic label.
+
+    Args:
+        topic: Topic from controlled vocabulary (domestic_politics,
+               international_relations, trade, defence_security, economy,
+               business, immigration, law_justice, health, education,
+               environment, technology, culture_arts, sport, social_issues,
+               media, religion, science, human_interest, conflict_crisis)
+        region: Optional region filter (min_score 0.3 applied)
+        content_type: Optional content type filter
+        limit: Max results (1-100, default 20)
+    """
+    limit = max(1, min(limit, 100))
+    conditions = ["t.topic = {topic:String}"]
+    params: dict = {"topic": topic, "limit": limit}
+    joins = ""
+
+    if region:
+        joins += (
+            f" JOIN {_DB}.article_regions AS r"
+            " ON r.article_id = t.article_id"
+        )
+        conditions.append("r.region = {region:String}")
+        conditions.append("r.score >= 0.3")
+        params["region"] = region
+
+    if content_type:
+        joins += (
+            f" JOIN {_DB}.article_enrichment AS e FINAL"
+            " ON e.article_id = t.article_id"
+        )
+        conditions.append("e.content_type = {content_type:String}")
+        params["content_type"] = content_type
+
+    sql = f"""
+        SELECT t.article_id, t.topic,
+               a.title, a.published_at, a.section_id, a.url
+        FROM {_DB}.article_topics AS t
+        JOIN {_DB}.articles AS a FINAL ON a.article_id = t.article_id
+        {joins}
+        WHERE {" AND ".join(conditions)}
+        ORDER BY a.published_at DESC
+        LIMIT {{limit:UInt32}}
+    """
+    return _query(sql, params)
+
+
+@mcp.tool()
+def browse_by_topic(region: str | None = None) -> list[dict]:
+    """Count of articles grouped by topic, optionally filtered by region.
+
+    Args:
+        region: Optional region filter (min_score 0.3 applied)
+    """
+    conditions: list[str] = []
+    params: dict = {}
+    join = ""
+
+    if region:
+        join = (
+            f"JOIN {_DB}.article_regions AS r "
+            "ON r.article_id = t.article_id"
+        )
+        conditions.append("r.region = {region:String}")
+        conditions.append("r.score >= 0.3")
+        params["region"] = region
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    sql = f"""
+        SELECT t.topic, count() AS article_count
+        FROM {_DB}.article_topics AS t
+        {join}
+        {where}
+        GROUP BY t.topic
+        ORDER BY article_count DESC
+    """
+    return _query(sql, params)
+
+
+@mcp.tool()
+def browse_by_content_type() -> list[dict]:
+    """Count of articles by content type."""
+    sql = f"""
+        SELECT content_type, count() AS article_count
+        FROM {_DB}.article_enrichment FINAL
+        WHERE content_type != ''
+        GROUP BY content_type
+        ORDER BY article_count DESC
+    """
+    return _query(sql)
+
+
+@mcp.tool()
+def browse_by_region() -> list[dict]:
+    """Count of articles by geographic region (articles can appear in multiple regions)."""
+    sql = f"""
+        SELECT region, count() AS article_count,
+               avg(score) AS avg_score
+        FROM {_DB}.article_regions
+        GROUP BY region
+        ORDER BY article_count DESC
+    """
+    return _query(sql)
+
+
+@mcp.tool()
 def db_stats() -> dict:
     """Row counts for all tables in the database."""
     stats = {}
     # ReplacingMergeTree tables — use FINAL for accurate deduped counts
-    for table in ("articles", "article_tags", "article_enrichment"):
+    for table in ("articles", "article_tags", "article_enrichment",
+                  "article_regions", "article_topics"):
         stats[table] = _scalar(f"SELECT count() FROM {_DB}.{table} FINAL")
     # Plain MergeTree tables
     for table in ("enrichment_log", "ingestion_log"):

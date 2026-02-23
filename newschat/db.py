@@ -25,6 +25,8 @@ SCHEMA_DDL = [
     lang            LowCardinality(String),
     short_url       String,
     thumbnail_url   String,
+    guardian_type    LowCardinality(String) DEFAULT '',
+    production_office LowCardinality(String) DEFAULT '',
     ingested_at     DateTime('UTC') DEFAULT now(),
     INDEX idx_article_id article_id TYPE bloom_filter GRANULARITY 1
 ) ENGINE = ReplacingMergeTree(ingested_at)
@@ -49,10 +51,22 @@ ORDER BY (article_id, tag_id)""",
     event_signature     String,
     event_date          Nullable(Date),
     summary             String,
+    content_type        LowCardinality(String) DEFAULT '',
     model_used          LowCardinality(String),
     prompt_version      LowCardinality(String)
 ) ENGINE = ReplacingMergeTree(enriched_at)
 ORDER BY (article_id, model_used, prompt_version)""",
+    f"""CREATE TABLE IF NOT EXISTS {_DB}.article_regions (
+    article_id      String,
+    region          LowCardinality(String),
+    score           Float32
+) ENGINE = ReplacingMergeTree()
+ORDER BY (article_id, region)""",
+    f"""CREATE TABLE IF NOT EXISTS {_DB}.article_topics (
+    article_id      String,
+    topic           LowCardinality(String)
+) ENGINE = ReplacingMergeTree()
+ORDER BY (article_id, topic)""",
     f"""CREATE TABLE IF NOT EXISTS {_DB}.enrichment_log (
     model               LowCardinality(String),
     prompt_version      LowCardinality(String),
@@ -87,15 +101,25 @@ def get_client():
     return clickhouse_connect.get_client(dsn=CLICKHOUSE_DSN)
 
 
+_MIGRATIONS = [
+    f"ALTER TABLE {_DB}.articles ADD COLUMN IF NOT EXISTS guardian_type LowCardinality(String) DEFAULT ''",
+    f"ALTER TABLE {_DB}.articles ADD COLUMN IF NOT EXISTS production_office LowCardinality(String) DEFAULT ''",
+    f"ALTER TABLE {_DB}.article_enrichment ADD COLUMN IF NOT EXISTS content_type LowCardinality(String) DEFAULT ''",
+]
+
+
 def init_schema():
-    """Create the database and all tables.
+    """Create the database and all tables, then apply column migrations.
 
     Safe to run on a fresh install because the client connects
-    without specifying a database.
+    without specifying a database.  Also safe to re-run — CREATE IF NOT
+    EXISTS and ADD COLUMN IF NOT EXISTS are idempotent.
     """
     client = get_client()
     try:
         for ddl in SCHEMA_DDL:
+            client.command(ddl)
+        for ddl in _MIGRATIONS:
             client.command(ddl)
     finally:
         client.close()

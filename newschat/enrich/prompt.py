@@ -4,7 +4,7 @@ The version string is stored alongside each enrichment row so we can
 track which prompt produced which results across experiments.
 """
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 SYSTEM_PROMPT = """\
 You are a media-analysis engine.  You receive a news article and return \
@@ -32,6 +32,24 @@ This is used to match the same event across sources.
 8. **Event date** — the date of the event if identifiable (ISO YYYY-MM-DD), \
 else null.
 9. **Summary** — 2-3 sentence neutral summary.
+10. **Geographic relevance** — assess which regions/audiences this content is \
+relevant to.  Not just where events occurred, but where the impacts, \
+implications, or audience interest lie.  Score each relevant region from 0.0 \
+to 1.0 where 1.0 means "primary focus" and 0.3+ means "meaningfully relevant".  \
+Use ONLY these region codes: australia, united_kingdom, united_states, europe, \
+middle_east, asia_pacific, latin_america, africa, global.  Include "global" \
+(scored appropriately) for stories with worldwide implications.  Omit regions \
+below 0.3.
+11. **Topics** — assign 1-4 topic labels from this controlled vocabulary: \
+domestic_politics, international_relations, trade, defence_security, economy, \
+business, immigration, law_justice, health, education, environment, technology, \
+culture_arts, sport, social_issues, media, religion, science, human_interest, \
+conflict_crisis.  Choose the most specific applicable topics.  Every piece of \
+content must have at least one topic.
+12. **Content type** — classify the content form as exactly one of: \
+news_report, analysis, opinion, live_blog, review, feature, letter, obituary, \
+roundup, data_visual, transcript, social_media_post, press_release, speech, \
+parliamentary_record.
 
 Respond ONLY with valid JSON matching the provided schema.  No markdown, no \
 commentary, no extra keys."""

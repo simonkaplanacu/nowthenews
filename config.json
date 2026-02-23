@@ -3,7 +3,7 @@
     "base_url": "https://content.guardianapis.com",
     "rate_limit_interval_seconds": 1.0,
     "daily_request_limit": 500,
-    "show_fields": "headline,standfirst,body,byline,wordcount,thumbnail,shortUrl,lang",
+    "show_fields": "headline,standfirst,body,byline,wordcount,thumbnail,shortUrl,lang,productionOffice",
     "show_tags": "keyword",
     "page_size": 200,
     "timeout_seconds": 30,

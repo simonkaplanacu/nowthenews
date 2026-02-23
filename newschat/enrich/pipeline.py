@@ -77,6 +77,8 @@ def _store_enrichment(
         event_date,
         # summary
         result.summary,
+        # content type
+        result.content_type,
         # metadata
         model,
         PROMPT_VERSION,
@@ -95,9 +97,31 @@ def _store_enrichment(
             "quotes.quote", "quotes.speaker", "quotes.context",
             "event_signature", "event_date",
             "summary",
+            "content_type",
             "model_used", "prompt_version",
         ],
     )
+
+    # Insert geographic relevance rows
+    if result.geographic_relevance:
+        region_rows = [
+            [article_id, g.region, g.score]
+            for g in result.geographic_relevance
+        ]
+        ch_client.insert(
+            f"{_DB}.article_regions",
+            region_rows,
+            column_names=["article_id", "region", "score"],
+        )
+
+    # Insert topic rows
+    if result.topics:
+        topic_rows = [[article_id, t] for t in result.topics]
+        ch_client.insert(
+            f"{_DB}.article_topics",
+            topic_rows,
+            column_names=["article_id", "topic"],
+        )
 
 
 def enrich(

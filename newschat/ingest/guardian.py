@@ -94,6 +94,8 @@ def _parse_article(raw: dict) -> Article | None:
             lang=fields.get("lang") or "en",
             short_url=fields.get("shortUrl") or "",
             thumbnail_url=fields.get("thumbnail") or "",
+            guardian_type=raw.get("type") or "",
+            production_office=fields.get("productionOffice") or "",
             tags=tags,
         )
     except Exception:

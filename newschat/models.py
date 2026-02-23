@@ -33,6 +33,8 @@ class Article:
     lang: str
     short_url: str
     thumbnail_url: str
+    guardian_type: str = ""
+    production_office: str = ""
     tags: list[Tag] = field(default_factory=list)
 
 
