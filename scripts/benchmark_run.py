@@ -9,6 +9,8 @@ Usage:
 
 import argparse
 import logging
+import shutil
+import subprocess
 import time
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -35,6 +37,21 @@ BENCHMARK_IDS_SQL = f"""
     ORDER BY cityHash64(article_id)
     LIMIT 50
 """
+
+def ensure_ollama():
+    """Check if Ollama is running; start it if not."""
+    ollama = shutil.which("ollama")
+    if not ollama:
+        raise RuntimeError("ollama not found on PATH")
+    try:
+        subprocess.run([ollama, "list"], capture_output=True, timeout=5, check=True)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        print("Ollama not running — starting it...")
+        subprocess.Popen([ollama, "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(3)
+        subprocess.run([ollama, "list"], capture_output=True, timeout=10, check=True)
+        print("Ollama started.")
+
 
 CANDIDATE_MODELS = [
     "qwen2.5:7b",
@@ -193,6 +210,7 @@ def main():
     args = parser.parse_args()
 
     setup_logging()
+    ensure_ollama()
 
     if args.list:
         show_status()
