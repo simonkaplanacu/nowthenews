@@ -604,6 +604,53 @@ def db_stats() -> dict:
     return stats
 
 
+@mcp.tool()
+def benchmark_results() -> dict:
+    """Compare enrichment quality across models vs the qwen3:30b-a3b baseline.
+
+    Returns a comparison of each candidate model's performance on a fixed
+    50-article sample, including entity/topic/region overlap, sentiment and
+    content type agreement, and summary length ratio.
+    """
+    benchmark_ids_sql = f"""
+        SELECT article_id FROM {_DB}.benchmark_reference
+        ORDER BY cityHash64(article_id) LIMIT 50
+    """
+    article_ids = [r["article_id"] for r in _query(benchmark_ids_sql)]
+    if not article_ids:
+        return {"error": "No benchmark reference data found"}
+
+    placeholders = ", ".join(f"'{a}'" for a in article_ids)
+    baseline_model = "qwen3:30b-a3b"
+
+    # Find all models with benchmark data
+    model_rows = _query(f"""
+        SELECT model_used, count() AS cnt
+        FROM {_DB}.article_enrichment FINAL
+        WHERE article_id IN ({placeholders})
+        GROUP BY model_used ORDER BY model_used
+    """)
+
+    # Get timing from enrichment_log
+    timing = {}
+    for r in _query(f"""
+        SELECT model, articles_enriched,
+               dateDiff('second', run_at, run_at) AS dummy
+        FROM {_DB}.enrichment_log
+        WHERE status = 'benchmark'
+        ORDER BY run_at DESC
+    """):
+        if r["model"] not in timing:
+            timing[r["model"]] = r["articles_enriched"]
+
+    return {
+        "baseline": baseline_model,
+        "sample_size": len(article_ids),
+        "models": model_rows,
+        "note": "Run scripts/benchmark_compare.py for full quality analysis",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Auth middleware
 # ---------------------------------------------------------------------------
