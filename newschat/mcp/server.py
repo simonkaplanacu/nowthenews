@@ -227,9 +227,9 @@ def search_by_entity(
     sql = f"""
         SELECT e.article_id, e_name, e_type,
                a.title, a.published_at, a.section_id
-        FROM {_DB}.article_enrichment FINAL AS e
+        FROM {_DB}.article_enrichment AS e FINAL
         ARRAY JOIN e.entities.name AS e_name, e.entities.type AS e_type
-        LEFT JOIN {_DB}.articles FINAL AS a ON a.article_id = e.article_id
+        LEFT JOIN {_DB}.articles AS a FINAL ON a.article_id = e.article_id
         WHERE {" AND ".join(conditions)}
         ORDER BY a.published_at DESC
         LIMIT {{limit:UInt32}}
@@ -287,7 +287,7 @@ def sentiment_breakdown(
 
     if from_date or to_date:
         join = (
-            f"JOIN {_DB}.articles FINAL AS a "
+            f"JOIN {_DB}.articles AS a FINAL "
             "ON a.article_id = e.article_id"
         )
         if from_date:
@@ -305,7 +305,7 @@ def sentiment_breakdown(
     sql = f"""
         SELECT e.sentiment, count() AS article_count,
                avg(e.sentiment_score) AS avg_score
-        FROM {_DB}.article_enrichment FINAL AS e
+        FROM {_DB}.article_enrichment AS e FINAL
         {join}
         {where}
         GROUP BY e.sentiment
@@ -329,11 +329,11 @@ def find_smoke_terms(
     sql = f"""
         SELECT e.article_id, st_term, st_context, st_rationale,
                a.title, a.published_at
-        FROM {_DB}.article_enrichment FINAL AS e
+        FROM {_DB}.article_enrichment AS e FINAL
         ARRAY JOIN e.smoke_terms.term AS st_term,
                    e.smoke_terms.context AS st_context,
                    e.smoke_terms.rationale AS st_rationale
-        LEFT JOIN {_DB}.articles FINAL AS a ON a.article_id = e.article_id
+        LEFT JOIN {_DB}.articles AS a FINAL ON a.article_id = e.article_id
         WHERE positionCaseInsensitive(st_term, {{query:String}}) > 0
            OR positionCaseInsensitive(st_context, {{query:String}}) > 0
            OR positionCaseInsensitive(st_rationale, {{query:String}}) > 0
@@ -396,11 +396,11 @@ def find_quotes(
     sql = f"""
         SELECT e.article_id, q_quote, q_speaker, q_context,
                a.title, a.published_at
-        FROM {_DB}.article_enrichment FINAL AS e
+        FROM {_DB}.article_enrichment AS e FINAL
         ARRAY JOIN e.quotes.quote AS q_quote,
                    e.quotes.speaker AS q_speaker,
                    e.quotes.context AS q_context
-        LEFT JOIN {_DB}.articles FINAL AS a ON a.article_id = e.article_id
+        LEFT JOIN {_DB}.articles AS a FINAL ON a.article_id = e.article_id
         {where}
         ORDER BY a.published_at DESC
         LIMIT {{limit:UInt32}}
