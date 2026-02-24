@@ -145,7 +145,7 @@ class GroqClient:
             ],
             "temperature": 0,
             "reasoning_effort": "none",
-            "max_tokens": 16384,
+            "max_tokens": 32768,
             "response_format": {"type": "json_object"},
         }
 
