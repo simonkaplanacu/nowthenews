@@ -17,6 +17,7 @@ from newschat.enrich.schema import EnrichmentResult, LenientEnrichmentResult
 log = logging.getLogger(__name__)
 
 _GROQ_BASE = "https://api.groq.com/openai/v1"
+_GROQ_RESPONSE_LOG = "logs/groq_responses.jsonl"
 
 
 class OllamaClient:
@@ -127,7 +128,7 @@ class GroqClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def enrich(self, system: str, user: str) -> EnrichmentResult | LenientEnrichmentResult:
+    def enrich(self, system: str, user: str, article_id: str | None = None) -> EnrichmentResult | LenientEnrichmentResult:
         schema_json = json.dumps(EnrichmentResult.model_json_schema(), indent=2)
         system_with_schema = (
             f"{system}\n\n"
@@ -144,12 +145,14 @@ class GroqClient:
             ],
             "temperature": 0,
             "reasoning_effort": "none",
+            "max_tokens": 16384,
             "response_format": {"type": "json_object"},
         }
 
         last_err: Exception | None = None
         for attempt in range(1 + self.MAX_RETRIES):
-            raw = self._call(payload)
+            raw, call_meta = self._call(payload)
+            self._log_response(article_id, call_meta, attempt + 1)
             try:
                 return EnrichmentResult.model_validate_json(raw)
             except ValidationError as e:
@@ -187,7 +190,7 @@ class GroqClient:
     # Internals
     # ------------------------------------------------------------------
 
-    def _call(self, payload: dict) -> str:
+    def _call(self, payload: dict) -> tuple[str, dict]:
         log.debug("Groq request model=%s", self.model)
         for attempt in range(3):
             resp = self._http.post("/chat/completions", json=payload)
@@ -202,13 +205,34 @@ class GroqClient:
             resp.raise_for_status()  # raise the last 429
         body = resp.json()
 
-        content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+        choice = body.get("choices", [{}])[0]
+        content = choice.get("message", {}).get("content", "")
         if not content:
             raise RuntimeError(f"Empty response from Groq: {json.dumps(body)[:500]}")
 
         usage = body.get("usage", {})
+        meta = {
+            "finish_reason": choice.get("finish_reason"),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+        }
         log.debug(
-            "Groq response: %d chars, prompt_tokens=%s, completion_tokens=%s",
-            len(content), usage.get("prompt_tokens"), usage.get("completion_tokens"),
+            "Groq response: %d chars, finish_reason=%s, prompt_tokens=%s, completion_tokens=%s",
+            len(content), meta["finish_reason"], meta["prompt_tokens"], meta["completion_tokens"],
         )
-        return content
+        return content, meta
+
+    def _log_response(self, article_id: str | None, meta: dict, attempt: int) -> None:
+        from datetime import datetime, timezone
+        from pathlib import Path
+        entry = {
+            "article_id": article_id,
+            "attempt": attempt,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            **meta,
+        }
+        path = Path(_GROQ_RESPONSE_LOG)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(entry) + "\n")

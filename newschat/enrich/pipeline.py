@@ -220,7 +220,7 @@ def _enrich_one(
             published_at=published_at,
             body_text=body_text,
         )
-        result = llm.enrich(system=SYSTEM_PROMPT, user=user_prompt)
+        result = llm.enrich(system=SYSTEM_PROMPT, user=user_prompt, article_id=article_id)
         if isinstance(result, LenientEnrichmentResult):
             _log_nonstandard_labels(article_id, result)
         with ch_lock:
