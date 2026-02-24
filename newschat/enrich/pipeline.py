@@ -2,18 +2,53 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
+from pathlib import Path
+
+from pydantic import ValidationError
 
 from newschat.config import CLICKHOUSE_DATABASE, ENRICH_BATCH_SIZE, ENRICH_MODEL
 from newschat.db import get_client as get_ch_client
-from newschat.enrich.llm import OllamaClient
+from newschat.enrich.llm import GroqClient, OllamaClient
 from newschat.enrich.prompt import PROMPT_VERSION, SYSTEM_PROMPT, build_user_prompt
 from newschat.enrich.schema import EnrichmentResult
 
 log = logging.getLogger(__name__)
 
 _DB = CLICKHOUSE_DATABASE
+_INVALID_LABELS_LOG = Path("logs/invalid_labels.jsonl")
+
+
+def _log_invalid_labels(article_id: str, exc: Exception) -> None:
+    """Extract invalid enum values from pydantic ValidationErrors and log to JSONL."""
+    cause = exc
+    while cause is not None:
+        if isinstance(cause, ValidationError):
+            break
+        cause = cause.__cause__
+    if not isinstance(cause, ValidationError):
+        return
+
+    entries = []
+    for err in cause.errors():
+        if err["type"] == "literal_error":
+            field = ".".join(str(loc) for loc in err["loc"])
+            entries.append({
+                "article_id": article_id,
+                "field": field,
+                "invalid_value": err["input"],
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
+
+    if entries:
+        _INVALID_LABELS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_INVALID_LABELS_LOG, "a") as f:
+            for entry in entries:
+                f.write(json.dumps(entry) + "\n")
 
 
 def _unenriched_ids(ch_client, limit: int, model: str) -> list[tuple[str, str, str, str, str, str]]:
@@ -124,21 +159,65 @@ def _store_enrichment(
         )
 
 
+def _enrich_one(
+    llm,
+    ch_client,
+    ch_lock: threading.Lock,
+    model: str,
+    article_id: str,
+    title: str,
+    headline: str,
+    byline: str,
+    published_at: str,
+    body_text: str,
+) -> bool:
+    """Enrich a single article. Returns True on success, False on failure."""
+    try:
+        user_prompt = build_user_prompt(
+            title=title,
+            headline=headline,
+            byline=byline,
+            published_at=published_at,
+            body_text=body_text,
+        )
+        result = llm.enrich(system=SYSTEM_PROMPT, user=user_prompt)
+        with ch_lock:
+            _store_enrichment(ch_client, article_id, result, model)
+        log.info(
+            "Enriched %s — %d entities, %d smoke terms, %d quotes",
+            article_id,
+            len(result.entities),
+            len(result.smoke_terms),
+            len(result.quotes),
+        )
+        return True
+    except Exception as exc:
+        _log_invalid_labels(article_id, exc)
+        log.exception("Failed to enrich %s", article_id)
+        return False
+
+
 def enrich(
     model: str | None = None,
     limit: int | None = None,
+    workers: int | None = None,
 ) -> dict:
     """Run the enrichment pipeline.
 
     Args:
-        model: Ollama model name. Defaults to config ENRICH_MODEL.
+        model: Model name. Prefix with ``groq:`` for Groq cloud inference.
         limit: Max articles to process this run. Defaults to config ENRICH_BATCH_SIZE.
+        workers: Concurrent threads. Defaults to 8 for Groq, 1 for Ollama.
 
     Returns:
         Summary dict with counts.
     """
     model = model if model is not None else ENRICH_MODEL
     limit = limit if limit is not None else ENRICH_BATCH_SIZE
+
+    is_groq = model.startswith("groq:")
+    if workers is None:
+        workers = 8 if is_groq else 1
 
     ch = None
     llm = None
@@ -148,40 +227,42 @@ def enrich(
 
     try:
         ch = get_ch_client()
-        llm = OllamaClient(model=model)
+        ch_lock = threading.Lock()
+
+        if is_groq:
+            groq_model = model[len("groq:"):]
+            llm = GroqClient(model=groq_model)
+        else:
+            llm = OllamaClient(model=model)
 
         if not llm.check_health():
-            raise RuntimeError(
-                f"Ollama not reachable or model '{model}' not available at {llm.host}"
-            )
+            backend = "Groq" if is_groq else "Ollama"
+            raise RuntimeError(f"{backend} not reachable or model '{model}' not available")
 
         rows = _unenriched_ids(ch, limit, model)
-        log.info("Found %d unenriched articles (model=%s, limit=%d)", len(rows), model, limit)
+        total = len(rows)
+        log.info(
+            "Found %d unenriched articles (model=%s, limit=%d, workers=%d)",
+            total, model, limit, workers,
+        )
 
-        for article_id, title, headline, byline, published_at, body_text in rows:
-            try:
-                user_prompt = build_user_prompt(
-                    title=title,
-                    headline=headline,
-                    byline=byline,
-                    published_at=published_at,
-                    body_text=body_text,
-                )
-                result = llm.enrich(system=SYSTEM_PROMPT, user=user_prompt)
-                _store_enrichment(ch, article_id, result, model)
-                enriched += 1
-                log.info(
-                    "Enriched %s (%d/%d) — %d entities, %d smoke terms, %d quotes",
-                    article_id,
-                    enriched,
-                    len(rows),
-                    len(result.entities),
-                    len(result.smoke_terms),
-                    len(result.quotes),
-                )
-            except Exception:
-                failed += 1
-                log.exception("Failed to enrich %s", article_id)
+        if workers <= 1:
+            for row in rows:
+                ok = _enrich_one(llm, ch, ch_lock, model, *row)
+                enriched += ok
+                failed += not ok
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(_enrich_one, llm, ch, ch_lock, model, *row): row[0]
+                    for row in rows
+                }
+                for future in as_completed(futures):
+                    ok = future.result()
+                    enriched += ok
+                    failed += not ok
+                    if (enriched + failed) % 50 == 0:
+                        log.info("Progress: %d/%d enriched, %d failed", enriched, total, failed)
 
     except Exception:
         log.exception("Enrichment run failed")

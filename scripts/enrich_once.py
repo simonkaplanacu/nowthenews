@@ -54,6 +54,12 @@ def main():
         help="Max articles to process this run",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Concurrent threads (default: 8 for Groq, 1 for Ollama)",
+    )
+    parser.add_argument(
         "--init-db",
         action="store_true",
         help="Create database and tables before enriching",
@@ -65,7 +71,7 @@ def main():
     if args.init_db:
         init_schema()
 
-    result = enrich(model=args.model, limit=args.limit)
+    result = enrich(model=args.model, limit=args.limit, workers=args.workers)
     print(
         f"Done: {result['enriched']} enriched, {result['failed']} failed "
         f"(model={result['model']}, prompt={result['prompt_version']})"

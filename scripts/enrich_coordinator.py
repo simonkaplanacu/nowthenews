@@ -86,6 +86,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run enrichment in batches until done")
     parser.add_argument("--batch", type=int, default=500, help="Articles per batch (default: 500)")
     parser.add_argument("--model", default=None, help=f"Ollama model (default: {ENRICH_MODEL})")
+    parser.add_argument("--workers", type=int, default=None, help="Concurrent threads (default: 8 for Groq, 1 for Ollama)")
     parser.add_argument("--dry-run", action="store_true", help="Show remaining count and exit")
     args = parser.parse_args()
 
@@ -97,8 +98,9 @@ def main():
 
     if args.dry_run:
         batches = (remaining + args.batch - 1) // args.batch
-        est_hours = remaining * 25 / 3600
-        log.info("Dry run: %d batches, estimated %.1f hours at ~25s/article", batches, est_hours)
+        secs_per_article = 4 if model.startswith("groq:") else 25
+        est_hours = remaining * secs_per_article / 3600
+        log.info("Dry run: %d batches, estimated %.1f hours at ~%ds/article", batches, est_hours, secs_per_article)
         return
 
     batch_num = 0
@@ -113,8 +115,9 @@ def main():
         log.info("Batch %d: %d articles (%d remaining)", batch_num, batch_size, remaining)
 
         try:
-            ensure_ollama()
-            result = enrich(model=model, limit=batch_size)
+            if not model.startswith("groq:"):
+                ensure_ollama()
+            result = enrich(model=model, limit=batch_size, workers=args.workers)
 
             total_enriched += result["enriched"]
             total_failed += result["failed"]
