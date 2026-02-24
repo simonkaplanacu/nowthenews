@@ -15,12 +15,52 @@ from newschat.config import CLICKHOUSE_DATABASE, ENRICH_BATCH_SIZE, ENRICH_MODEL
 from newschat.db import get_client as get_ch_client
 from newschat.enrich.llm import GroqClient, OllamaClient
 from newschat.enrich.prompt import PROMPT_VERSION, SYSTEM_PROMPT, build_user_prompt
-from newschat.enrich.schema import EnrichmentResult
+from newschat.enrich.schema import (
+    CONTENT_TYPES,
+    ENTITY_TYPES,
+    REGION_CODES,
+    SENTIMENT_VALUES,
+    TOPIC_VALUES,
+    EnrichmentResult,
+    LenientEnrichmentResult,
+)
 
 log = logging.getLogger(__name__)
 
 _DB = CLICKHOUSE_DATABASE
 _INVALID_LABELS_LOG = Path("logs/invalid_labels.jsonl")
+
+
+_KNOWN_ENTITY_TYPES = set(ENTITY_TYPES.__args__)
+_KNOWN_REGIONS = set(REGION_CODES.__args__)
+_KNOWN_TOPICS = set(TOPIC_VALUES.__args__)
+_KNOWN_CONTENT_TYPES = set(CONTENT_TYPES.__args__)
+_KNOWN_SENTIMENTS = set(SENTIMENT_VALUES.__args__)
+
+
+def _log_nonstandard_labels(article_id: str, result: LenientEnrichmentResult) -> None:
+    """Log any labels outside the known vocabulary from a lenient result."""
+    entries = []
+    ts = datetime.now(timezone.utc).isoformat()
+    for i, e in enumerate(result.entities):
+        if e.type not in _KNOWN_ENTITY_TYPES:
+            entries.append({"article_id": article_id, "field": f"entities.{i}.type", "invalid_value": e.type, "ts": ts})
+    for i, g in enumerate(result.geographic_relevance):
+        if g.region not in _KNOWN_REGIONS:
+            entries.append({"article_id": article_id, "field": f"geographic_relevance.{i}.region", "invalid_value": g.region, "ts": ts})
+    for i, t in enumerate(result.topics):
+        if t not in _KNOWN_TOPICS:
+            entries.append({"article_id": article_id, "field": f"topics.{i}", "invalid_value": t, "ts": ts})
+    if result.content_type not in _KNOWN_CONTENT_TYPES:
+        entries.append({"article_id": article_id, "field": "content_type", "invalid_value": result.content_type, "ts": ts})
+    if result.sentiment not in _KNOWN_SENTIMENTS:
+        entries.append({"article_id": article_id, "field": "sentiment", "invalid_value": result.sentiment, "ts": ts})
+
+    if entries:
+        _INVALID_LABELS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_INVALID_LABELS_LOG, "a") as f:
+            for entry in entries:
+                f.write(json.dumps(entry) + "\n")
 
 
 def _log_invalid_labels(article_id: str, exc: Exception) -> None:
@@ -74,7 +114,7 @@ def _unenriched_ids(ch_client, limit: int, model: str) -> list[tuple[str, str, s
 def _store_enrichment(
     ch_client,
     article_id: str,
-    result: EnrichmentResult,
+    result: EnrichmentResult | LenientEnrichmentResult,
     model: str,
 ) -> None:
     """Write one enrichment row to ClickHouse."""
@@ -181,6 +221,8 @@ def _enrich_one(
             body_text=body_text,
         )
         result = llm.enrich(system=SYSTEM_PROMPT, user=user_prompt)
+        if isinstance(result, LenientEnrichmentResult):
+            _log_nonstandard_labels(article_id, result)
         with ch_lock:
             _store_enrichment(ch_client, article_id, result, model)
         log.info(

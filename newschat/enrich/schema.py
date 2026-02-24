@@ -88,3 +88,33 @@ class EnrichmentResult(BaseModel):
         description="1-4 topic labels from the controlled vocabulary",
     )
     content_type: CONTENT_TYPES = Field(description="Content form classification")
+
+
+# --- Lenient variants: accept any string for enum fields (for Groq) ---
+
+class LenientEntity(BaseModel):
+    name: str
+    type: str
+
+
+class LenientGeographicRelevance(BaseModel):
+    region: str
+    score: float = Field(ge=0.0, le=1.0)
+
+
+class LenientEnrichmentResult(BaseModel):
+    """Lenient variant that accepts non-vocabulary labels as plain strings."""
+
+    entities: list[LenientEntity] = Field(default_factory=list)
+    policy_domains: list[PolicyDomain] = Field(default_factory=list)
+    sentiment: str = ""
+    sentiment_score: float = Field(ge=-1.0, le=1.0)
+    framing_notes: str = ""
+    smoke_terms: list[SmokeTerm] = Field(default_factory=list)
+    quotes: list[Quote] = Field(default_factory=list)
+    event_signature: str = ""
+    event_date: str | None = None
+    summary: str = ""
+    geographic_relevance: list[LenientGeographicRelevance] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    content_type: str = ""

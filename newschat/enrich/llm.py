@@ -10,7 +10,9 @@ from typing import Any
 import httpx
 
 from newschat.config import GROQ_API_KEY, OLLAMA_HOST, OLLAMA_NUM_CTX
-from newschat.enrich.schema import EnrichmentResult
+from pydantic import ValidationError
+
+from newschat.enrich.schema import EnrichmentResult, LenientEnrichmentResult
 
 log = logging.getLogger(__name__)
 
@@ -125,7 +127,7 @@ class GroqClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def enrich(self, system: str, user: str) -> EnrichmentResult:
+    def enrich(self, system: str, user: str) -> EnrichmentResult | LenientEnrichmentResult:
         schema_json = json.dumps(EnrichmentResult.model_json_schema(), indent=2)
         system_with_schema = (
             f"{system}\n\n"
@@ -150,10 +152,21 @@ class GroqClient:
             raw = self._call(payload)
             try:
                 return EnrichmentResult.model_validate_json(raw)
+            except ValidationError as e:
+                # If all errors are just non-vocabulary labels, accept leniently
+                if all(err["type"] == "literal_error" for err in e.errors()):
+                    log.info("Groq returned non-vocabulary labels, accepting leniently")
+                    return LenientEnrichmentResult.model_validate_json(raw)
+                # Structural error — retry
+                last_err = e
+                log.warning(
+                    "Groq JSON structure error (attempt %d/%d): %s — raw[:200]: %s",
+                    attempt + 1, 1 + self.MAX_RETRIES, e, raw[:200],
+                )
             except Exception as e:
                 last_err = e
                 log.warning(
-                    "Groq JSON parse failed (attempt %d/%d): %s — raw[:200]: %s",
+                    "Groq parse failed (attempt %d/%d): %s — raw[:200]: %s",
                     attempt + 1, 1 + self.MAX_RETRIES, e, raw[:200],
                 )
         raise RuntimeError(f"Groq returned invalid JSON after {1 + self.MAX_RETRIES} attempts") from last_err
