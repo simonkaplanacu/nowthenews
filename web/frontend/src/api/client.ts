@@ -106,7 +106,7 @@ export function fetchCooccurrenceArticles(a: string, b: string, filters?: Filter
   );
 }
 
-export function fetchTopicRiver(filters?: { time_from?: string; time_to?: string; bucket?: string }) {
+export function fetchTopicRiver(filters?: { time_from?: string; time_to?: string; region?: string; bucket?: string }) {
   return get<TopicRiverData>("/api/topic-river", filters);
 }
 

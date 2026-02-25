@@ -408,6 +408,7 @@ def get_cooccurrence_articles(
 def get_topic_river(
     time_from: str | None = Query(None),
     time_to: str | None = Query(None),
+    region: str | None = Query(None),
     bucket: str = Query("day"),
 ):
     """Time-series data for the topic streamgraph."""
@@ -424,6 +425,11 @@ def get_topic_river(
 
     time_where = (" AND " + " AND ".join(time_parts)) if time_parts else ""
 
+    region_join = ""
+    if region:
+        region_join = f"INNER JOIN {_DB}.article_regions r ON r.article_id = a.article_id AND r.region = %(region)s"
+        params["region"] = region
+
     if bucket == "hour":
         trunc = "toStartOfHour(a.published_at)"
     else:
@@ -437,6 +443,7 @@ def get_topic_river(
         FROM {_DB}.article_topics t
         INNER JOIN {_DB}.articles a FINAL ON a.article_id = t.article_id
         INNER JOIN {_DB}.article_enrichment e FINAL ON e.article_id = a.article_id
+        {region_join}
         WHERE e.prompt_version = %(pv)s {time_where}
         GROUP BY ts, t.topic
         ORDER BY ts, t.topic
