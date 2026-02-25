@@ -288,6 +288,52 @@ body {
   height: 100% !important;
 }
 
+/* Search view */
+.search-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.search-view-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.search-view-input {
+  flex: 1;
+  max-width: 600px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.search-result-count {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-left: 8px;
+}
+
+.search-results {
+  flex: 1;
+  overflow-y: auto;
+  max-width: 800px;
+}
+
+.search-hint {
+  color: var(--text-secondary);
+  font-size: 14px;
+  padding: 20px 0;
+}
+
 /* River view */
 .river-view {
   height: 100%;

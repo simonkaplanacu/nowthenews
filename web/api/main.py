@@ -518,6 +518,63 @@ def get_articles(
     ]
 
 
+@app.get("/api/text-search")
+def text_search(
+    q: str = Query(..., min_length=2),
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
+    limit: int = Query(50),
+    offset: int = Query(0),
+):
+    """Full-text substring search across article body, title, and headline.
+
+    Multiple terms separated by commas — ALL must match (AND logic).
+    """
+    ch = _get_ch()
+    terms = [t.strip() for t in q.split(",") if t.strip()]
+    if not terms:
+        return []
+
+    params: dict = {"limit": limit, "offset": offset}
+    where_parts: list[str] = []
+
+    for i, term in enumerate(terms):
+        key = f"q{i}"
+        params[key] = term
+        where_parts.append(
+            f"(positionCaseInsensitive(a.body_text, %({key})s) > 0"
+            f" OR positionCaseInsensitive(a.title, %({key})s) > 0"
+            f" OR positionCaseInsensitive(a.headline, %({key})s) > 0)"
+        )
+
+    time_clause, time_params = _time_filter("a", time_from, time_to)
+    params.update(time_params)
+    if time_clause:
+        where_parts.append(time_clause)
+
+    where = " AND ".join(where_parts)
+
+    query = f"""
+        SELECT
+            a.article_id, a.title, a.headline, a.standfirst,
+            a.source, a.section_name, a.published_at, a.url, a.word_count
+        FROM {_DB}.articles a FINAL
+        WHERE {where}
+        ORDER BY a.published_at DESC
+        LIMIT %(limit)s OFFSET %(offset)s
+    """
+    rows = ch.query(query, parameters=params).result_rows
+    return [
+        {
+            "article_id": r[0], "title": r[1], "headline": r[2],
+            "standfirst": r[3], "source": r[4], "section": r[5],
+            "published_at": r[6].isoformat() if r[6] else None, "url": r[7],
+            "word_count": r[8],
+        }
+        for r in rows
+    ]
+
+
 @app.get("/api/stats")
 def get_stats():
     """Quick stats for the dashboard."""

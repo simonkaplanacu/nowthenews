@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Enrichment watchdog — kills the coordinator if Groq 429 errors spike.
+"""Enrichment watchdog — kills the coordinator if Groq errors spike.
 
-Designed to run via launchctl on a 60-second interval. Checks the last
-200 lines of the enrichment log for rate-limit errors. If the count
+Designed to run via launchctl on a 60-second interval. Checks log lines
+from the last 5 minutes for rate-limit or billing errors. If the count
 exceeds the threshold, kills the coordinator process and logs the action.
 
 Usage (standalone test):
@@ -16,14 +16,15 @@ import logging
 import os
 import signal
 import subprocess
-import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 LOG_FILE = Path(__file__).parent.parent / "logs" / "newschat.log"
 WATCHDOG_LOG = Path(__file__).parent.parent / "logs" / "watchdog.log"
-TAIL_LINES = 200
-ERROR_THRESHOLD = 5  # kill if this many 429s in last TAIL_LINES
-ERROR_PATTERNS = ["429", "rate_limit", "Rate limit", "Too Many Requests", "RateLimitError", "400 Bad Request"]
+WINDOW_MINUTES = 5
+ERROR_THRESHOLD = 5
+ERROR_PATTERNS = ["429", "rate_limit", "Rate limit", "Too Many Requests",
+                  "RateLimitError", "400 Bad Request"]
 
 logging.basicConfig(
     filename=str(WATCHDOG_LOG),
@@ -33,23 +34,35 @@ logging.basicConfig(
 log = logging.getLogger("watchdog")
 
 
-def count_errors() -> int:
-    """Count rate-limit errors in the tail of the enrichment log."""
+def count_recent_errors() -> int:
+    """Count rate-limit/billing errors in log lines from the last WINDOW_MINUTES."""
     if not LOG_FILE.exists():
         return 0
     try:
         result = subprocess.run(
-            ["tail", f"-{TAIL_LINES}", str(LOG_FILE)],
+            ["tail", "-500", str(LOG_FILE)],
             capture_output=True, text=True, timeout=5,
         )
-        lines = result.stdout
+        lines = result.stdout.splitlines()
     except Exception as e:
         log.warning("Failed to read log: %s", e)
         return 0
 
+    cutoff = datetime.now() - timedelta(minutes=WINDOW_MINUTES)
     count = 0
-    for pattern in ERROR_PATTERNS:
-        count += lines.count(pattern)
+    for line in lines:
+        # Parse timestamp from log line: "2026-02-26 06:12:08,045 ..."
+        try:
+            ts_str = line[:23]
+            ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S,%f")
+        except (ValueError, IndexError):
+            continue
+        if ts < cutoff:
+            continue
+        for pattern in ERROR_PATTERNS:
+            if pattern in line:
+                count += 1
+                break
     return count
 
 
@@ -61,7 +74,6 @@ def find_coordinator_pid() -> int | None:
             capture_output=True, text=True, timeout=5,
         )
         pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
-        # Return the actual python process, not the shell wrapper
         return max(pids) if pids else None
     except Exception:
         return None
@@ -70,8 +82,8 @@ def find_coordinator_pid() -> int | None:
 def kill_coordinator(pid: int, error_count: int):
     """Kill the coordinator and log the reason."""
     log.warning(
-        "Killing coordinator (PID %d) — %d rate-limit errors in last %d log lines",
-        pid, error_count, TAIL_LINES,
+        "Killing coordinator (PID %d) — %d errors in last %d minutes",
+        pid, error_count, WINDOW_MINUTES,
     )
     try:
         os.kill(pid, signal.SIGTERM)
@@ -85,14 +97,14 @@ def kill_coordinator(pid: int, error_count: int):
 def main():
     pid = find_coordinator_pid()
     if pid is None:
-        # No coordinator running — nothing to watch
         return
 
-    error_count = count_errors()
+    error_count = count_recent_errors()
     if error_count >= ERROR_THRESHOLD:
         kill_coordinator(pid, error_count)
     else:
-        log.debug("OK — %d errors (threshold %d), coordinator PID %d", error_count, ERROR_THRESHOLD, pid)
+        log.info("OK — %d errors in last %dm (threshold %d), coordinator PID %d",
+                 error_count, WINDOW_MINUTES, ERROR_THRESHOLD, pid)
 
 
 if __name__ == "__main__":

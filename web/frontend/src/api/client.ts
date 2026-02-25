@@ -121,3 +121,7 @@ export function fetchStats() {
 export function fetchNLQuery(q: string): Promise<NLFilters> {
   return get<NLFilters>("/api/nl-query", { q });
 }
+
+export function fetchTextSearch(q: string, filters?: { time_from?: string; time_to?: string; limit?: number; offset?: number }) {
+  return get<Article[]>("/api/text-search", { q, ...filters });
+}
