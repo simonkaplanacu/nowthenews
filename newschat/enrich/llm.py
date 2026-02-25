@@ -153,6 +153,12 @@ class GroqClient:
         for attempt in range(1 + self.MAX_RETRIES):
             raw, call_meta = self._call(payload)
             self._log_response(article_id, call_meta, attempt + 1)
+
+            if call_meta["finish_reason"] == "length":
+                raise RuntimeError(
+                    f"Groq response truncated ({call_meta['completion_tokens']} tokens) — article too long"
+                )
+
             try:
                 return EnrichmentResult.model_validate_json(raw)
             except ValidationError as e:

@@ -7,26 +7,31 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 ENTITY_TYPES = Literal[
-    "person", "organisation", "place", "event", "legislation", "statistic"
+    "person", "organisation", "place", "event", "legislation", "statistic",
+    "work", "product", "species", "substance", "concept", "medical_condition",
+    "technology",
 ]
 SENTIMENT_VALUES = Literal["positive", "negative", "neutral", "mixed"]
 
 REGION_CODES = Literal[
-    "australia", "united_kingdom", "united_states", "europe",
-    "middle_east", "asia_pacific", "latin_america", "africa", "global"
+    "north_america", "latin_america_caribbean", "europe",
+    "middle_east", "asia_pacific", "oceania", "africa", "global",
 ]
 
 TOPIC_VALUES = Literal[
     "domestic_politics", "international_relations", "trade", "defence_security",
     "economy", "business", "immigration", "law_justice", "health", "education",
     "environment", "technology", "culture_arts", "sport", "social_issues",
-    "media", "religion", "science", "human_interest", "conflict_crisis"
+    "media", "religion", "science", "human_interest", "conflict_crisis",
+    "transport", "energy", "agriculture_food", "infrastructure_planning",
+    "tourism_travel", "history_heritage", "labour",
 ]
 
 CONTENT_TYPES = Literal[
-    "news_report", "analysis", "opinion", "live_blog", "review", "feature",
-    "letter", "obituary", "roundup", "data_visual", "transcript",
-    "social_media_post", "press_release", "speech", "parliamentary_record"
+    "news_report", "analysis", "opinion", "editorial", "live_blog", "review",
+    "feature", "interview", "letter", "obituary", "roundup", "correction",
+    "recipe", "community_callout", "data_visual", "transcript",
+    "social_media_post", "press_release", "speech", "parliamentary_record",
 ]
 
 

@@ -4,16 +4,17 @@ The version string is stored alongside each enrichment row so we can
 track which prompt produced which results across experiments.
 """
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 
 SYSTEM_PROMPT = """\
 You are a media-analysis engine.  You receive a news article and return \
 structured JSON — nothing else.
 
 Your tasks:
-1. **Entities** — extract every named entity (people, organisations, places, \
-events, legislation, statistics).  Normalise spelling but stay faithful to \
-the text.
+1. **Entities** — extract every named entity.  Classify each using ONLY these \
+types: person, organisation, place, event, legislation, statistic, work, \
+product, species, substance, concept, medical_condition, technology.  \
+Normalise spelling but stay faithful to the text.
 2. **Policy domains** — identify which policy areas the article covers \
 (e.g. healthcare, immigration, climate, defence) and rate relevance 0-1.
 3. **Sentiment** — classify the overall tone as positive / negative / \
@@ -36,23 +37,28 @@ else null.
 relevant to.  Not just where events occurred, but where the impacts, \
 implications, or audience interest lie.  Score each relevant region from 0.0 \
 to 1.0 where 1.0 means "primary focus" and 0.3+ means "meaningfully relevant".  \
-Use ONLY these region codes: australia, united_kingdom, united_states, europe, \
-middle_east, asia_pacific, latin_america, africa, global.  Include "global" \
+Use ONLY these region codes: north_america, latin_america_caribbean, europe, \
+middle_east, asia_pacific, oceania, africa, global.  Include "global" \
 (scored appropriately) for stories with worldwide implications.  Omit regions \
 below 0.3.
 11. **Topics** — assign 1-4 topic labels from this controlled vocabulary: \
 domestic_politics, international_relations, trade, defence_security, economy, \
 business, immigration, law_justice, health, education, environment, technology, \
 culture_arts, sport, social_issues, media, religion, science, human_interest, \
-conflict_crisis.  Choose the most specific applicable topics.  Every piece of \
-content must have at least one topic.
+conflict_crisis, transport, energy, agriculture_food, infrastructure_planning, \
+tourism_travel, history_heritage, labour.  Choose the most specific applicable \
+topics.  Every piece of content must have at least one topic.
 12. **Content type** — classify the content form as exactly one of: \
-news_report, analysis, opinion, live_blog, review, feature, letter, obituary, \
-roundup, data_visual, transcript, social_media_post, press_release, speech, \
+news_report, analysis, opinion, editorial, live_blog, review, feature, \
+interview, letter, obituary, roundup, correction, recipe, community_callout, \
+data_visual, transcript, social_media_post, press_release, speech, \
 parliamentary_record.
 
 Respond ONLY with valid JSON matching the provided schema.  No markdown, no \
 commentary, no extra keys."""
+
+
+_MAX_BODY_CHARS = 12_000
 
 
 def build_user_prompt(
@@ -63,6 +69,8 @@ def build_user_prompt(
     body_text: str,
 ) -> str:
     """Build the user message containing the article to analyse."""
+    if len(body_text) > _MAX_BODY_CHARS:
+        body_text = body_text[:_MAX_BODY_CHARS] + "\n\n[TRUNCATED]"
     return (
         f"TITLE: {title}\n"
         f"HEADLINE: {headline}\n"
