@@ -126,17 +126,24 @@ export default function GraphView() {
     async (node: any) => {
       setPanel({ title: `Loading articles for "${node.name}"...`, articles: [] });
       try {
-        const articles = await fetchEntityArticles(node.name, {
+        const timeFilters = {
           time_from: filters.timeFrom || undefined,
           time_to: filters.timeTo || undefined,
-        });
-        setPanel({ title: `${node.name} (${articles.length} articles)`, articles });
+        };
+        // In ego mode, show only articles where both entities co-occur
+        if (searchLabel && node.name.toLowerCase() !== searchLabel.toLowerCase()) {
+          const articles = await fetchCooccurrenceArticles(searchLabel, node.name, timeFilters);
+          setPanel({ title: `${searchLabel} + ${node.name} (${articles.length} articles)`, articles });
+        } else {
+          const articles = await fetchEntityArticles(node.name, timeFilters);
+          setPanel({ title: `${node.name} (${articles.length} articles)`, articles });
+        }
       } catch (err) {
         console.error(err);
         setPanel({ title: `Error loading articles for "${node.name}"`, articles: [] });
       }
     },
-    [filters.timeFrom, filters.timeTo]
+    [filters.timeFrom, filters.timeTo, searchLabel]
   );
 
   const handleLinkClick = useCallback(
