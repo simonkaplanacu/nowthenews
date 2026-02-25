@@ -205,6 +205,8 @@ class GroqClient:
                 log.warning("Groq 429 — waiting %.1fs (attempt %d/3)", retry_after, attempt + 1)
                 time.sleep(retry_after)
                 continue
+            if resp.status_code >= 400:
+                log.error("Groq HTTP %d: %s", resp.status_code, resp.text[:500])
             resp.raise_for_status()
             break
         else:

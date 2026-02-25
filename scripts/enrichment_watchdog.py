@@ -22,9 +22,9 @@ from pathlib import Path
 LOG_FILE = Path(__file__).parent.parent / "logs" / "newschat.log"
 WATCHDOG_LOG = Path(__file__).parent.parent / "logs" / "watchdog.log"
 WINDOW_MINUTES = 5
-ERROR_THRESHOLD = 5
+ERROR_THRESHOLD = 30
 ERROR_PATTERNS = ["429", "rate_limit", "Rate limit", "Too Many Requests",
-                  "RateLimitError", "400 Bad Request"]
+                  "RateLimitError"]
 
 logging.basicConfig(
     filename=str(WATCHDOG_LOG),
