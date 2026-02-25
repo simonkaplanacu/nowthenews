@@ -281,10 +281,10 @@ def get_entity_graph(
     # Step 2: Co-occurrence edges between top entities
     edges_query = f"""
         SELECT
-            e1_name, e2_name, count(DISTINCT article_id) AS weight
+            e1_name, e2_name, count(DISTINCT aid) AS weight
         FROM (
             SELECT
-                e.article_id,
+                e.article_id AS aid,
                 lower(n1) AS e1_name,
                 lower(n2) AS e2_name
             FROM {_DB}.article_enrichment e FINAL
