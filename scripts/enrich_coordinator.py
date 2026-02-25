@@ -34,6 +34,7 @@ _DB = CLICKHOUSE_DATABASE
 log = logging.getLogger("enrich_coordinator")
 
 MAX_CONSECUTIVE_FAILURES = 5
+MAX_CONSECUTIVE_ZERO_ENRICHED = 3
 RETRY_DELAY_SECONDS = 30
 
 
@@ -107,6 +108,7 @@ def main():
     total_enriched = 0
     total_failed = 0
     consecutive_failures = 0
+    consecutive_zero_enriched = 0
     start_time = time.time()
 
     while remaining > 0:
@@ -135,6 +137,27 @@ def main():
             if result["enriched"] == 0 and result["failed"] == 0:
                 log.info("Nothing to process — done")
                 break
+
+            if result["enriched"] == 0 and result["failed"] > 0:
+                consecutive_zero_enriched += 1
+                failure_pct = result["failed"] / max(result["enriched"] + result["failed"], 1) * 100
+                log.warning(
+                    "Batch %d: 0 enriched, %d failed (100%% failure rate) — "
+                    "consecutive all-fail batches: %d/%d",
+                    batch_num, result["failed"],
+                    consecutive_zero_enriched, MAX_CONSECUTIVE_ZERO_ENRICHED,
+                )
+                if consecutive_zero_enriched >= MAX_CONSECUTIVE_ZERO_ENRICHED:
+                    log.error(
+                        "%d consecutive batches with 0 enriched — "
+                        "likely API outage or billing limit. Stopping.",
+                        MAX_CONSECUTIVE_ZERO_ENRICHED,
+                    )
+                    break
+                log.info("Waiting %ds before next batch", RETRY_DELAY_SECONDS)
+                time.sleep(RETRY_DELAY_SECONDS)
+            else:
+                consecutive_zero_enriched = 0
 
         except KeyboardInterrupt:
             log.info("Interrupted by user")
