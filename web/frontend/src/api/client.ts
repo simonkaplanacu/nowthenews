@@ -106,6 +106,10 @@ export function fetchCooccurrenceArticles(a: string, b: string, filters?: Filter
   );
 }
 
+export function fetchEntityEgo(name: string, filters?: { time_from?: string; time_to?: string; entity_type?: string; limit?: number }) {
+  return get<GraphData>(`/api/entity-ego/${encodeURIComponent(name)}`, filters ? { ...filters } : undefined);
+}
+
 export function fetchTopicRiver(filters?: { time_from?: string; time_to?: string; region?: string; bucket?: string }) {
   return get<TopicRiverData>("/api/topic-river", filters);
 }

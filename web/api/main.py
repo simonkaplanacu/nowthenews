@@ -311,6 +311,90 @@ def get_entity_graph(
     return {"nodes": nodes, "edges": edges}
 
 
+@app.get("/api/entity-ego/{entity_name}")
+def get_entity_ego(
+    entity_name: str,
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
+    entity_type: str | None = Query(None),
+    limit: int = Query(50),
+):
+    """Return ego graph: a named entity + all co-occurring entities + edges."""
+    ch = _get_ch()
+    time_clause, params = _time_filter("a", time_from, time_to)
+    params["pv"] = _PROMPT_VERSION
+    params["ename"] = entity_name.lower()
+    params["limit"] = limit
+
+    where_parts = [
+        "e.prompt_version = %(pv)s",
+        "has(arrayMap(x -> lower(x), e.`entities.name`), %(ename)s)",
+    ]
+    if time_clause:
+        where_parts.append(time_clause)
+    where = " AND ".join(where_parts)
+
+    # Get all entities co-occurring with the target entity
+    type_filter = ""
+    if entity_type:
+        type_filter = "AND ent_type = %(etype)s"
+        params["etype"] = entity_type
+
+    nodes_query = f"""
+        SELECT
+            lower(ent_name) AS entity_name,
+            ent_type AS entity_type,
+            count(DISTINCT e.article_id) AS article_count
+        FROM {_DB}.article_enrichment e FINAL
+        ARRAY JOIN e.`entities.name` AS ent_name, e.`entities.type` AS ent_type
+        INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id
+        WHERE {where} {type_filter}
+        GROUP BY entity_name, entity_type
+        ORDER BY article_count DESC
+        LIMIT %(limit)s
+    """
+    node_rows = ch.query(nodes_query, parameters=params).result_rows
+    nodes = [
+        {"id": r[0], "name": r[0], "type": r[1], "article_count": r[2]}
+        for r in node_rows
+    ]
+    node_names = {r[0] for r in node_rows}
+
+    if len(node_names) < 2:
+        return {"nodes": nodes, "edges": []}
+
+    # Edges between these entities (within articles mentioning the target)
+    edges_query = f"""
+        SELECT
+            e1_name, e2_name, count(DISTINCT aid) AS weight
+        FROM (
+            SELECT
+                e.article_id AS aid,
+                lower(n1) AS e1_name,
+                lower(n2) AS e2_name
+            FROM {_DB}.article_enrichment e FINAL
+            ARRAY JOIN e.`entities.name` AS n1
+            INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id
+            ARRAY JOIN e.`entities.name` AS n2
+            WHERE {where}
+              AND e1_name < e2_name
+        )
+        WHERE e1_name IN %(names)s AND e2_name IN %(names)s
+        GROUP BY e1_name, e2_name
+        HAVING weight >= 1
+        ORDER BY weight DESC
+        LIMIT 300
+    """
+    params["names"] = list(node_names)
+    edge_rows = ch.query(edges_query, parameters=params).result_rows
+    edges = [
+        {"source": r[0], "target": r[1], "weight": r[2]}
+        for r in edge_rows
+    ]
+
+    return {"nodes": nodes, "edges": edges}
+
+
 @app.get("/api/entity/{entity_name}/articles")
 def get_entity_articles(
     entity_name: str,
@@ -339,7 +423,8 @@ def get_entity_articles(
     query = f"""
         SELECT
             a.article_id, a.title, a.headline, a.standfirst,
-            a.source, a.section_name, a.published_at, a.url
+            a.source, a.section_name, a.published_at, a.url,
+            e.sentiment, e.content_type, e.summary
         FROM {_DB}.article_enrichment e FINAL
         INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id
         WHERE {where}
@@ -352,6 +437,7 @@ def get_entity_articles(
             "article_id": r[0], "title": r[1], "headline": r[2],
             "standfirst": r[3], "source": r[4], "section": r[5],
             "published_at": r[6].isoformat() if r[6] else None, "url": r[7],
+            "sentiment": r[8], "content_type": r[9], "summary": r[10],
         }
         for r in rows
     ]
@@ -386,7 +472,8 @@ def get_cooccurrence_articles(
     query = f"""
         SELECT
             a.article_id, a.title, a.headline, a.standfirst,
-            a.source, a.section_name, a.published_at, a.url
+            a.source, a.section_name, a.published_at, a.url,
+            e.sentiment, e.content_type, e.summary
         FROM {_DB}.article_enrichment e FINAL
         INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id
         WHERE {where}
@@ -399,6 +486,7 @@ def get_cooccurrence_articles(
             "article_id": r[0], "title": r[1], "headline": r[2],
             "standfirst": r[3], "source": r[4], "section": r[5],
             "published_at": r[6].isoformat() if r[6] else None, "url": r[7],
+            "sentiment": r[8], "content_type": r[9], "summary": r[10],
         }
         for r in rows
     ]
