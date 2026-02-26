@@ -667,6 +667,10 @@ def _bearer_middleware():
 
     class BearerAuth(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
+            # Let .well-known discovery requests pass through with 404
+            # so Claude Desktop doesn't enter an OAuth flow
+            if request.url.path.startswith("/.well-known/"):
+                return PlainTextResponse("Not Found", status_code=404)
             auth = request.headers.get("authorization", "")
             if auth != f"Bearer {token}":
                 return PlainTextResponse("Unauthorized", status_code=401)

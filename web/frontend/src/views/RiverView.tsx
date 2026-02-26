@@ -1,11 +1,14 @@
 import { useEffect, useState, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import * as d3 from "d3";
 import { useFilters } from "../context/FilterContext";
 import {
   fetchTopicRiver,
   fetchArticles,
   fetchNLQuery,
+  fetchTopicTrends,
   type TopicRiverData,
+  type TopicTrend,
   type Article,
   type NLFilters,
 } from "../api/client";
@@ -16,10 +19,12 @@ const TOPIC_COLORS = d3.schemeTableau10.concat(d3.schemePaired).slice(0, 30);
 interface PanelState {
   title: string;
   articles: Article[];
+  topic?: string;
 }
 
 export default function RiverView() {
   const filters = useFilters();
+  const navigate = useNavigate();
   const svgRef = useRef<SVGSVGElement>(null);
   const [riverData, setRiverData] = useState<TopicRiverData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,18 +33,24 @@ export default function RiverView() {
   const [nlQuery, setNlQuery] = useState("");
   const [nlFilters, setNlFilters] = useState<NLFilters | null>(null);
   const [nlLoading, setNlLoading] = useState(false);
+  const [trends, setTrends] = useState<TopicTrend[] | null>(null);
+  const [showTrends, setShowTrends] = useState(false);
 
   const loadData = useCallback(async (region?: string) => {
     setLoading(true);
     try {
       const bucket = filters.timeFrom && daysDiff(filters.timeFrom) <= 7 ? "hour" : "day";
-      const data = await fetchTopicRiver({
-        time_from: filters.timeFrom || undefined,
-        time_to: filters.timeTo || undefined,
-        region,
-        bucket,
-      });
+      const [data, trendsData] = await Promise.all([
+        fetchTopicRiver({
+          time_from: filters.timeFrom || undefined,
+          time_to: filters.timeTo || undefined,
+          region,
+          bucket,
+        }),
+        fetchTopicTrends({ region }).catch(() => null),
+      ]);
       setRiverData(data);
+      if (trendsData) setTrends(trendsData.trends);
     } catch (err) {
       console.error("Failed to load river data:", err);
     } finally {
@@ -105,7 +116,7 @@ export default function RiverView() {
             time_to: nextBucket(timestamp, filters.timeFrom),
             limit: 30,
           });
-          setPanel({ title: `${topic.replace(/_/g, " ")} — ${articles.length} articles`, articles });
+          setPanel({ title: `${topic.replace(/_/g, " ")} — ${articles.length} articles`, articles, topic });
         } catch (err) {
           console.error(err);
         }
@@ -139,6 +150,14 @@ export default function RiverView() {
         {nlFilters && (
           <button onClick={clearNlFilters} className="nl-clear" title="Clear NL filters">x</button>
         )}
+        {trends && (
+          <button
+            onClick={() => setShowTrends((p) => !p)}
+            className={`search-btn${showTrends ? " search-btn-find" : ""}`}
+          >
+            Trends
+          </button>
+        )}
       </div>
       {nlFilters && (
         <div className="nl-pills" style={{ top: 42 }}>
@@ -158,11 +177,62 @@ export default function RiverView() {
       )}
       {loading && <div className="loading-msg">Loading topic river...</div>}
       <svg ref={svgRef} className="river-svg" />
+      {showTrends && trends && (
+        <div className="trends-overlay">
+          <div className="trends-header">
+            <h3>Topic Trends (4-week change)</h3>
+            <button className="panel-close" onClick={() => setShowTrends(false)}>x</button>
+          </div>
+          <div className="trends-list">
+            {trends
+              .filter((t) => t.current_count > 0 || t.previous_count > 0)
+              .sort((a, b) => Math.abs(b.pct_change) - Math.abs(a.pct_change))
+              .map((t) => {
+                const maxPct = Math.max(...trends.map((tr) => Math.abs(tr.pct_change)));
+                const barWidth = maxPct > 0 ? (Math.abs(t.pct_change) / maxPct) * 100 : 0;
+                const isGrowth = t.pct_change >= 0;
+                return (
+                  <div key={t.topic} className="trend-row">
+                    <span className="trend-label">{t.topic.replace(/_/g, " ")}</span>
+                    <div className="trend-bar-track">
+                      <div className="trend-bar-neg">
+                        {!isGrowth && (
+                          <div
+                            className="trend-bar"
+                            style={{ width: `${barWidth}%`, background: "#ef5350", marginLeft: "auto" }}
+                          />
+                        )}
+                      </div>
+                      <div className="trend-bar-pos">
+                        {isGrowth && (
+                          <div
+                            className="trend-bar"
+                            style={{ width: `${barWidth}%`, background: "#66bb6a" }}
+                          />
+                        )}
+                      </div>
+                    </div>
+                    <span className={`trend-pct ${isGrowth ? "trend-up" : "trend-down"}`}>
+                      {isGrowth ? "+" : ""}{t.pct_change.toFixed(0)}%
+                    </span>
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      )}
       {panel && (
         <ArticlePanel
           title={panel.title}
           articles={panel.articles}
           onClose={() => setPanel(null)}
+          extraAction={panel.topic ? {
+            label: "View graph",
+            onClick: () => {
+              filters.setTopic(panel.topic!);
+              navigate("/");
+            },
+          } : undefined}
         />
       )}
     </div>

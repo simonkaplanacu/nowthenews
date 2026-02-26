@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { useFilters } from "../context/FilterContext";
 import { fetchTextSearch, type Article } from "../api/client";
+import { exportCSV, exportJSON } from "../utils/export";
 
 export default function SearchView() {
   const filters = useFilters();
@@ -47,6 +48,12 @@ export default function SearchView() {
           <span className="search-result-count">
             {loading ? "" : `${results.length} result${results.length !== 1 ? "s" : ""}`}
           </span>
+        )}
+        {results.length > 0 && (
+          <>
+            <button className="export-btn" onClick={() => exportCSV(results)}>CSV</button>
+            <button className="export-btn" onClick={() => exportJSON(results)}>JSON</button>
+          </>
         )}
       </div>
       <div className="search-results">

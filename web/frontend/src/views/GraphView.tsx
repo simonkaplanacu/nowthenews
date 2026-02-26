@@ -48,6 +48,7 @@ export default function GraphView() {
   const [panel, setPanel] = useState<PanelState | null>(null);
   const [query, setQuery] = useState("");
   const [searchLabel, setSearchLabel] = useState<string | null>(null);
+  const [noResults, setNoResults] = useState(false);
   const graphRef = useRef<any>(null);
 
   const loadGraph = useCallback(async () => {
@@ -57,6 +58,7 @@ export default function GraphView() {
         time_from: filters.timeFrom || undefined,
         time_to: filters.timeTo || undefined,
         entity_type: filters.entityType || undefined,
+        topic: filters.topic || undefined,
         min_cooccurrence: filters.minCooccurrence,
         min_articles: filters.minArticles,
         limit: 150,
@@ -74,7 +76,7 @@ export default function GraphView() {
     } finally {
       setLoading(false);
     }
-  }, [filters.timeFrom, filters.timeTo, filters.entityType, filters.minCooccurrence, filters.minArticles]);
+  }, [filters.timeFrom, filters.timeTo, filters.entityType, filters.topic, filters.minCooccurrence, filters.minArticles]);
 
   useEffect(() => {
     if (!searchLabel) loadGraph();
@@ -84,6 +86,7 @@ export default function GraphView() {
     const q = query.trim();
     if (!q) return;
     setLoading(true);
+    setNoResults(false);
     try {
       // Fetch ego graph for this entity from the backend
       const data = await fetchEntityEgo(q, {
@@ -93,9 +96,8 @@ export default function GraphView() {
         limit: 50,
       });
       if (data.nodes.length === 0) {
-        // No entity found — reload default graph
-        setSearchLabel(null);
-        await loadGraph();
+        setNoResults(true);
+        setLoading(false);
         return;
       }
       setGraphData({
@@ -118,6 +120,7 @@ export default function GraphView() {
   const handleClear = useCallback(() => {
     setQuery("");
     setSearchLabel(null);
+    setNoResults(false);
     setSelectedNode(null);
     loadGraph();
   }, [loadGraph]);
@@ -214,6 +217,18 @@ export default function GraphView() {
         <div className="nl-pills">
           <span className="nl-pill pill-topic">entity: {searchLabel}</span>
           <button onClick={handleClear} className="nl-clear" title="Clear search">x</button>
+        </div>
+      )}
+      {noResults && (
+        <div className="nl-pills">
+          <span className="nl-pill" style={{ background: "#e57373" }}>No entity found for "{query}"</span>
+          <button onClick={handleClear} className="nl-clear" title="Clear">x</button>
+        </div>
+      )}
+      {filters.topic && (
+        <div className="nl-pills" style={{ top: searchLabel || noResults ? 72 : 42 }}>
+          <span className="nl-pill pill-topic">topic: {filters.topic.replace(/_/g, " ")}</span>
+          <button onClick={() => filters.setTopic("")} className="nl-clear" title="Clear topic filter">x</button>
         </div>
       )}
       <div className="graph-container">

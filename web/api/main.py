@@ -17,25 +17,17 @@ log = logging.getLogger(__name__)
 _DB = CLICKHOUSE_DATABASE
 
 # ---------------------------------------------------------------------------
-# ClickHouse connection pool (module-level singleton)
+# ClickHouse connection — new client per request to avoid concurrent query errors
 # ---------------------------------------------------------------------------
-_ch = None
 
 
 def _get_ch():
-    global _ch
-    if _ch is None:
-        _ch = clickhouse_connect.get_client(dsn=CLICKHOUSE_DSN)
-    return _ch
+    return clickhouse_connect.get_client(dsn=CLICKHOUSE_DSN)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    global _ch
-    if _ch is not None:
-        _ch.close()
-        _ch = None
 
 
 # ---------------------------------------------------------------------------
@@ -403,13 +395,13 @@ def get_entity_articles(
     limit: int = Query(50),
     offset: int = Query(0),
 ):
-    """Articles mentioning a specific entity."""
+    """Articles mentioning a specific entity (substring match)."""
     ch = _get_ch()
     time_clause, params = _time_filter("a", time_from, time_to)
 
     where_parts = [
         f"e.prompt_version = %(pv)s",
-        "has(arrayMap(x -> lower(x), e.`entities.name`), %(ename)s)",
+        "arrayExists(x -> positionCaseInsensitive(x, %(ename)s) > 0, e.`entities.name`)",
     ]
     params["pv"] = _PROMPT_VERSION
     params["ename"] = entity_name.lower()
@@ -451,14 +443,14 @@ def get_cooccurrence_articles(
     time_to: str | None = Query(None),
     limit: int = Query(50),
 ):
-    """Articles where both entities co-occur."""
+    """Articles where both entities co-occur (substring match)."""
     ch = _get_ch()
     time_clause, params = _time_filter("a", time_from, time_to)
 
     where_parts = [
         f"e.prompt_version = %(pv)s",
-        "has(arrayMap(x -> lower(x), e.`entities.name`), %(ea)s)",
-        "has(arrayMap(x -> lower(x), e.`entities.name`), %(eb)s)",
+        "arrayExists(x -> positionCaseInsensitive(x, %(ea)s) > 0, e.`entities.name`)",
+        "arrayExists(x -> positionCaseInsensitive(x, %(eb)s) > 0, e.`entities.name`)",
     ]
     params["pv"] = _PROMPT_VERSION
     params["ea"] = entity_a.lower()
@@ -668,6 +660,302 @@ def text_search(
         }
         for r in rows
     ]
+
+
+@app.get("/api/sentiment-heatmap")
+def get_sentiment_heatmap(
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
+    region: str | None = Query(None),
+    bucket: str = Query("week"),
+):
+    """Topic × time grid colored by average sentiment score."""
+    from newschat.enrich.schema import TOPIC_VALUES
+    import typing
+    valid_topics = list(typing.get_args(TOPIC_VALUES))
+
+    ch = _get_ch()
+    params: dict = {"pv": _PROMPT_VERSION, "valid_topics": valid_topics}
+
+    time_parts = []
+    if time_from:
+        time_parts.append("a.published_at >= %(time_from)s")
+        params["time_from"] = time_from
+    if time_to:
+        time_parts.append("a.published_at <= %(time_to)s")
+        params["time_to"] = time_to
+    time_where = (" AND " + " AND ".join(time_parts)) if time_parts else ""
+
+    region_join = ""
+    if region:
+        region_join = f"INNER JOIN {_DB}.article_regions r ON r.article_id = a.article_id AND r.region = %(region)s"
+        params["region"] = region
+
+    trunc = "toMonday(a.published_at)" if bucket == "week" else "toDate(a.published_at)"
+
+    query = f"""
+        SELECT
+            {trunc} AS ts,
+            t.topic,
+            avg(e.sentiment_score) AS avg_sentiment,
+            count(DISTINCT a.article_id) AS cnt
+        FROM {_DB}.article_topics t
+        INNER JOIN {_DB}.articles a FINAL ON a.article_id = t.article_id
+        INNER JOIN {_DB}.article_enrichment e FINAL ON e.article_id = a.article_id
+        {region_join}
+        WHERE e.prompt_version = %(pv)s AND e.sentiment_score != 0
+          AND t.topic IN %(valid_topics)s
+          {time_where}
+        GROUP BY ts, t.topic
+        ORDER BY ts, t.topic
+    """
+    rows = ch.query(query, parameters=params).result_rows
+
+    ts_set: set[str] = set()
+    topic_set: set[str] = set()
+    cells = []
+    for ts, topic, avg_s, cnt in rows:
+        ts_str = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+        ts_set.add(ts_str)
+        topic_set.add(topic)
+        cells.append({"ts": ts_str, "topic": topic, "avg_sentiment": round(float(avg_s), 3), "count": cnt})
+
+    return {
+        "timestamps": sorted(ts_set),
+        "topics": sorted(topic_set),
+        "cells": cells,
+    }
+
+
+@app.get("/api/entity-timeline")
+def get_entity_timeline(
+    entities: str = Query(..., min_length=1),
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
+    bucket: str = Query("week"),
+):
+    """Time-series of entity mention counts (substring match on names)."""
+    ch = _get_ch()
+    search_terms = [e.strip().lower() for e in entities.split(",") if e.strip()]
+    if not search_terms:
+        return {"timestamps": [], "series": []}
+
+    params: dict = {"pv": _PROMPT_VERSION}
+
+    # Step 1: Resolve each search term to the best-matching entity name.
+    # Prefer exact matches, then matches where the term is a whole word,
+    # then shortest names (most specific), breaking ties by article count.
+    resolved: list[str] = []
+    for i, term in enumerate(search_terms):
+        key = f"term{i}"
+        params[key] = term
+        resolve_query = f"""
+            SELECT lower(ent_name) AS n, count(DISTINCT e.article_id) AS c
+            FROM {_DB}.article_enrichment e FINAL
+            ARRAY JOIN e.`entities.name` AS ent_name
+            WHERE e.prompt_version = %(pv)s
+              AND positionCaseInsensitive(ent_name, %({key})s) > 0
+            GROUP BY n
+            HAVING c >= 2
+            ORDER BY
+              (n = %({key})s OR n LIKE concat(%({key})s, ' %%') OR n LIKE concat('%% ', %({key})s)) DESC,
+              c DESC
+            LIMIT 1
+        """
+        rows = ch.query(resolve_query, parameters=params).result_rows
+        if rows:
+            resolved.append(rows[0][0])
+
+    if not resolved:
+        return {"timestamps": [], "series": []}
+
+    params["resolved"] = resolved
+
+    time_parts = []
+    if time_from:
+        time_parts.append("a.published_at >= %(time_from)s")
+        params["time_from"] = time_from
+    if time_to:
+        time_parts.append("a.published_at <= %(time_to)s")
+        params["time_to"] = time_to
+    time_where = (" AND " + " AND ".join(time_parts)) if time_parts else ""
+
+    trunc = "toMonday(a.published_at)" if bucket == "week" else "toDate(a.published_at)"
+
+    query = f"""
+        SELECT
+            {trunc} AS ts,
+            lower(ent_name) AS entity_name,
+            count(DISTINCT e.article_id) AS cnt
+        FROM {_DB}.article_enrichment e FINAL
+        ARRAY JOIN e.`entities.name` AS ent_name
+        INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id
+        WHERE e.prompt_version = %(pv)s
+          AND lower(ent_name) IN %(resolved)s
+          {time_where}
+        GROUP BY ts, entity_name
+        ORDER BY ts, entity_name
+    """
+    rows = ch.query(query, parameters=params).result_rows
+
+    from collections import defaultdict
+    ts_set: set[str] = set()
+    by_entity: dict[str, dict[str, int]] = defaultdict(dict)
+    for ts, ename, cnt in rows:
+        ts_str = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+        ts_set.add(ts_str)
+        by_entity[ename][ts_str] = cnt
+
+    timestamps = sorted(ts_set)
+    series = [
+        {"entity": ename, "values": [vals.get(ts, 0) for ts in timestamps]}
+        for ename, vals in sorted(by_entity.items())
+    ]
+    return {"timestamps": timestamps, "series": series}
+
+
+_VALID_REGIONS = [
+    "north_america", "latin_america_caribbean", "europe",
+    "middle_east", "asia_pacific", "oceania", "africa", "global",
+]
+
+
+@app.get("/api/region-overview")
+def get_region_overview(
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
+    topic: str | None = Query(None),
+):
+    """Per-region article count, avg sentiment, and top entities."""
+    ch = _get_ch()
+    params: dict = {"pv": _PROMPT_VERSION, "valid_regions": _VALID_REGIONS}
+
+    time_parts = []
+    if time_from:
+        time_parts.append("a.published_at >= %(time_from)s")
+        params["time_from"] = time_from
+    if time_to:
+        time_parts.append("a.published_at <= %(time_to)s")
+        params["time_to"] = time_to
+    time_where = (" AND " + " AND ".join(time_parts)) if time_parts else ""
+
+    topic_join = ""
+    if topic:
+        topic_join = f"INNER JOIN {_DB}.article_topics t ON t.article_id = a.article_id AND t.topic = %(topic)s"
+        params["topic"] = topic
+
+    # Counts + avg sentiment per region
+    summary_query = f"""
+        SELECT
+            r.region,
+            count(DISTINCT a.article_id) AS article_count,
+            avg(e.sentiment_score) AS avg_sentiment
+        FROM {_DB}.article_regions r
+        INNER JOIN {_DB}.articles a FINAL ON a.article_id = r.article_id
+        INNER JOIN {_DB}.article_enrichment e FINAL ON e.article_id = a.article_id
+        {topic_join}
+        WHERE e.prompt_version = %(pv)s
+          AND r.region IN %(valid_regions)s
+          {time_where}
+        GROUP BY r.region
+        ORDER BY article_count DESC
+    """
+    summary_rows = ch.query(summary_query, parameters=params).result_rows
+
+    # Top 5 entities per region
+    entities_query = f"""
+        SELECT
+            r.region,
+            lower(ent_name) AS entity_name,
+            count(DISTINCT a.article_id) AS cnt
+        FROM {_DB}.article_regions r
+        INNER JOIN {_DB}.articles a FINAL ON a.article_id = r.article_id
+        INNER JOIN {_DB}.article_enrichment e FINAL ON e.article_id = a.article_id
+        ARRAY JOIN e.`entities.name` AS ent_name
+        {topic_join}
+        WHERE e.prompt_version = %(pv)s
+          AND r.region IN %(valid_regions)s
+          {time_where}
+        GROUP BY r.region, entity_name
+        ORDER BY r.region, cnt DESC
+    """
+    ent_rows = ch.query(entities_query, parameters=params).result_rows
+
+    # Group top 5 entities per region
+    from collections import defaultdict
+    region_entities: dict[str, list[dict]] = defaultdict(list)
+    for region, ename, cnt in ent_rows:
+        if len(region_entities[region]) < 5:
+            region_entities[region].append({"name": ename, "count": cnt})
+
+    regions = []
+    for region, count, avg_s in summary_rows:
+        regions.append({
+            "region": region,
+            "article_count": count,
+            "avg_sentiment": round(float(avg_s), 3),
+            "top_entities": region_entities.get(region, []),
+        })
+
+    return {"regions": regions}
+
+
+@app.get("/api/topic-trends")
+def get_topic_trends(
+    weeks: int = Query(4),
+    region: str | None = Query(None),
+):
+    """Emerging/declining topics: current N weeks vs previous N weeks."""
+    ch = _get_ch()
+    import typing
+    from newschat.enrich.schema import TOPIC_VALUES
+    valid_topics = list(typing.get_args(TOPIC_VALUES))
+    params: dict = {"pv": _PROMPT_VERSION, "weeks": weeks, "valid_topics": valid_topics}
+
+    region_join = ""
+    if region:
+        region_join = f"INNER JOIN {_DB}.article_regions r ON r.article_id = a.article_id AND r.region = %(region)s"
+        params["region"] = region
+
+    query = f"""
+        WITH latest AS (
+            SELECT max(a.published_at) AS mx
+            FROM {_DB}.article_enrichment e FINAL
+            INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id
+            WHERE e.prompt_version = %(pv)s
+        )
+        SELECT
+            t.topic,
+            countIf(a.published_at >= (SELECT mx FROM latest) - %(weeks)s * 7) AS current_count,
+            countIf(a.published_at < (SELECT mx FROM latest) - %(weeks)s * 7
+                AND a.published_at >= (SELECT mx FROM latest) - %(weeks)s * 14) AS previous_count
+        FROM {_DB}.article_topics t
+        INNER JOIN {_DB}.articles a FINAL ON a.article_id = t.article_id
+        INNER JOIN {_DB}.article_enrichment e FINAL ON e.article_id = a.article_id
+        {region_join}
+        WHERE e.prompt_version = %(pv)s
+          AND a.published_at >= (SELECT mx FROM latest) - %(weeks)s * 14
+          AND t.topic IN %(valid_topics)s
+        GROUP BY t.topic
+        HAVING current_count + previous_count > 0
+        ORDER BY current_count DESC
+    """
+    rows = ch.query(query, parameters=params).result_rows
+    trends = []
+    for topic, current, previous in rows:
+        if previous > 0:
+            pct_change = round(((current - previous) / previous) * 100, 1)
+        elif current > 0:
+            pct_change = 100.0
+        else:
+            pct_change = 0.0
+        trends.append({
+            "topic": topic,
+            "current_count": current,
+            "previous_count": previous,
+            "pct_change": pct_change,
+        })
+    return {"trends": trends}
 
 
 @app.get("/api/stats")

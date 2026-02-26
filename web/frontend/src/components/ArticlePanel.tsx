@@ -1,17 +1,30 @@
 import type { Article } from "../api/client";
+import { exportCSV, exportJSON } from "../utils/export";
 
 interface Props {
   title: string;
   articles: Article[];
   onClose: () => void;
+  extraAction?: { label: string; onClick: () => void };
 }
 
-export default function ArticlePanel({ title, articles, onClose }: Props) {
+export default function ArticlePanel({ title, articles, onClose, extraAction }: Props) {
   return (
     <aside className="article-panel">
       <div className="panel-header">
         <h2>{title}</h2>
-        <button className="close-btn" onClick={onClose}>×</button>
+        <div className="panel-actions">
+          {extraAction && (
+            <button className="export-btn" onClick={extraAction.onClick}>{extraAction.label}</button>
+          )}
+          {articles.length > 0 && (
+            <>
+              <button className="export-btn" onClick={() => exportCSV(articles)} title="Export CSV">CSV</button>
+              <button className="export-btn" onClick={() => exportJSON(articles)} title="Export JSON">JSON</button>
+            </>
+          )}
+          <button className="close-btn" onClick={onClose}>×</button>
+        </div>
       </div>
       <div className="panel-body">
         {articles.length === 0 && <p className="empty">No articles found.</p>}

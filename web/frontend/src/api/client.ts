@@ -129,3 +129,72 @@ export function fetchNLQuery(q: string): Promise<NLFilters> {
 export function fetchTextSearch(q: string, filters?: { time_from?: string; time_to?: string; limit?: number; offset?: number }) {
   return get<Article[]>("/api/text-search", { q, ...filters });
 }
+
+// --- Sentiment Heatmap ---
+
+export interface HeatmapCell {
+  ts: string;
+  topic: string;
+  avg_sentiment: number;
+  count: number;
+}
+
+export interface HeatmapData {
+  timestamps: string[];
+  topics: string[];
+  cells: HeatmapCell[];
+}
+
+export function fetchSentimentHeatmap(filters?: { time_from?: string; time_to?: string; region?: string; bucket?: string }) {
+  return get<HeatmapData>("/api/sentiment-heatmap", filters);
+}
+
+// --- Entity Timeline ---
+
+export interface TimelineSeries {
+  entity: string;
+  values: number[];
+}
+
+export interface TimelineData {
+  timestamps: string[];
+  series: TimelineSeries[];
+}
+
+export function fetchEntityTimeline(entities: string[], filters?: { time_from?: string; time_to?: string; bucket?: string }) {
+  return get<TimelineData>("/api/entity-timeline", { entities: entities.join(","), ...filters });
+}
+
+// --- Region Overview ---
+
+export interface RegionInfo {
+  region: string;
+  article_count: number;
+  avg_sentiment: number;
+  top_entities: { name: string; count: number }[];
+}
+
+export interface RegionOverviewData {
+  regions: RegionInfo[];
+}
+
+export function fetchRegionOverview(filters?: { time_from?: string; time_to?: string; topic?: string }) {
+  return get<RegionOverviewData>("/api/region-overview", filters);
+}
+
+// --- Topic Trends ---
+
+export interface TopicTrend {
+  topic: string;
+  current_count: number;
+  previous_count: number;
+  pct_change: number;
+}
+
+export interface TopicTrendsData {
+  trends: TopicTrend[];
+}
+
+export function fetchTopicTrends(filters?: { weeks?: number; region?: string }) {
+  return get<TopicTrendsData>("/api/topic-trends", filters);
+}
