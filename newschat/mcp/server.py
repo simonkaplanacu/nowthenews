@@ -89,20 +89,28 @@ def search_articles(
 ) -> list[dict]:
     """Full-text search across article titles, headlines, and body text.
 
+    Each word is matched independently (AND logic) — all words must appear
+    somewhere in the article's title, headline, or body text.
+
     Args:
-        query: Search text (case-insensitive substring match)
+        query: Search words (each matched independently, case-insensitive)
         from_date: Filter by publish date >= this (YYYY-MM-DD)
         to_date: Filter by publish date <= this (YYYY-MM-DD)
         section: Filter by section_id (e.g. 'politics', 'world')
         limit: Max results (1-100, default 20)
     """
     limit = max(1, min(limit, 100))
-    conditions = [
-        "(positionCaseInsensitive(title, {query:String}) > 0"
-        " OR positionCaseInsensitive(headline, {query:String}) > 0"
-        " OR positionCaseInsensitive(body_text, {query:String}) > 0)"
-    ]
-    params: dict = {"query": query, "limit": limit}
+    words = [w for w in query.split() if w]
+    conditions = []
+    params: dict = {"limit": limit}
+    for i, word in enumerate(words):
+        key = f"q{i}"
+        params[key] = word
+        conditions.append(
+            f"(positionCaseInsensitive(title, {{{key}:String}}) > 0"
+            f" OR positionCaseInsensitive(headline, {{{key}:String}}) > 0"
+            f" OR positionCaseInsensitive(body_text, {{{key}:String}}) > 0)"
+        )
     if from_date:
         conditions.append("published_at >= toDateTime({from_date:String})")
         params["from_date"] = from_date

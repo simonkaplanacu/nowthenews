@@ -618,19 +618,23 @@ def text_search(
 ):
     """Full-text substring search across article body, title, and headline.
 
-    Multiple terms separated by commas — ALL must match (AND logic).
+    Each word is matched independently (AND logic) — all words must appear
+    somewhere in the article's title, headline, or body text.
     """
     ch = _get_ch()
-    terms = [t.strip() for t in q.split(",") if t.strip()]
-    if not terms:
+    # Split on commas first, then split each part on whitespace
+    words: list[str] = []
+    for part in q.split(","):
+        words.extend(w for w in part.strip().split() if w)
+    if not words:
         return []
 
     params: dict = {"limit": limit, "offset": offset}
     where_parts: list[str] = []
 
-    for i, term in enumerate(terms):
+    for i, word in enumerate(words):
         key = f"q{i}"
-        params[key] = term
+        params[key] = word
         where_parts.append(
             f"(positionCaseInsensitive(a.body_text, %({key})s) > 0"
             f" OR positionCaseInsensitive(a.title, %({key})s) > 0"
