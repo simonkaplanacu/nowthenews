@@ -816,6 +816,77 @@ def list_search_matches(
 
 
 # ---------------------------------------------------------------------------
+# Enrichment Exceptions tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def list_enrichment_exceptions(
+    status: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """List articles that repeatedly fail enrichment.
+
+    Args:
+        status: Filter by status (pending, skip, retry)
+        limit: Max results (1-200, default 50)
+    """
+    limit = max(1, min(limit, 200))
+    conditions: list[str] = []
+    params: dict = {"limit": limit}
+
+    if status:
+        conditions.append("ex.status = {status:String}")
+        params["status"] = status
+
+    where = f"AND {' AND '.join(conditions)}" if conditions else ""
+    sql = f"""
+        SELECT ex.article_id, ex.reason, ex.fail_count, ex.status, ex.updated_at,
+               a.title, a.published_at
+        FROM {_DB}.enrichment_exceptions AS ex FINAL
+        LEFT JOIN {_DB}.articles AS a FINAL ON a.article_id = ex.article_id
+        WHERE 1=1 {where}
+        ORDER BY ex.fail_count DESC, ex.updated_at DESC
+        LIMIT {{limit:UInt32}}
+    """
+    return _query(sql, params)
+
+
+@mcp.tool()
+def update_enrichment_exception(
+    article_id: str,
+    status: str,
+) -> dict:
+    """Update the status of an enrichment exception.
+
+    Set to 'skip' to permanently ignore the article, or 'retry' to re-attempt
+    enrichment on the next run.
+
+    Args:
+        article_id: The article identifier
+        status: New status — 'skip' (ignore forever) or 'retry' (try again)
+    """
+    if status not in ("skip", "retry"):
+        return {"error": "status must be 'skip' or 'retry'"}
+
+    if status == "retry":
+        # Delete the exception row so it gets re-attempted
+        _command(
+            f"ALTER TABLE {_DB}.enrichment_exceptions DELETE "
+            f"WHERE article_id = %(aid)s",
+            parameters={"aid": article_id},
+        )
+        return {"status": "retry", "article_id": article_id, "note": "Exception removed, will retry on next run"}
+    else:
+        _command(
+            f"ALTER TABLE {_DB}.enrichment_exceptions UPDATE status = 'skip' "
+            f"WHERE article_id = %(aid)s",
+            parameters={"aid": article_id},
+        )
+        return {"status": "skip", "article_id": article_id, "note": "Article will be skipped in future runs"}
+
+
+# ---------------------------------------------------------------------------
 # Auth middleware
 # ---------------------------------------------------------------------------
 

@@ -93,7 +93,8 @@ def _log_invalid_labels(article_id: str, exc: Exception) -> None:
 
 def _unenriched_ids(ch_client, limit: int, model: str) -> list[tuple[str, str, str, str, str, str]]:
     """Return (article_id, title, headline, byline, published_at, body_text) for
-    articles that have not yet been enriched by this model+prompt combo."""
+    articles that have not yet been enriched by this model+prompt combo.
+    Excludes articles with status='skip' in enrichment_exceptions."""
     query = f"""
         SELECT a.article_id, a.title, a.headline, a.byline,
                toString(a.published_at), a.body_text
@@ -102,6 +103,9 @@ def _unenriched_ids(ch_client, limit: int, model: str) -> list[tuple[str, str, s
             SELECT article_id FROM {_DB}.article_enrichment
             WHERE model_used = %(model)s AND prompt_version = %(pv)s
         ) e ON a.article_id = e.article_id
+        LEFT JOIN {_DB}.enrichment_exceptions ex FINAL
+            ON ex.article_id = a.article_id
+        WHERE ex.status IS NULL OR ex.status != 'skip'
         ORDER BY a.published_at, a.article_id
         LIMIT %(limit)s
     """
@@ -203,6 +207,32 @@ def _store_enrichment(
         )
 
 
+def _record_exception(
+    ch_client,
+    ch_lock: threading.Lock,
+    article_id: str,
+    reason: str,
+) -> None:
+    """Upsert a failure into enrichment_exceptions (ReplacingMergeTree merges on article_id)."""
+    try:
+        truncated = reason[:500]
+        with ch_lock:
+            # Read current fail_count (may not exist yet)
+            result = ch_client.query(
+                f"SELECT fail_count FROM {_DB}.enrichment_exceptions FINAL "
+                f"WHERE article_id = %(aid)s",
+                parameters={"aid": article_id},
+            )
+            current = result.result_rows[0][0] if result.result_rows else 0
+            ch_client.insert(
+                f"{_DB}.enrichment_exceptions",
+                [[article_id, truncated, current + 1, "pending", datetime.now(timezone.utc)]],
+                column_names=["article_id", "reason", "fail_count", "status", "updated_at"],
+            )
+    except Exception:
+        log.exception("Failed to record enrichment exception for %s", article_id)
+
+
 def _enrich_one(
     llm,
     ch_client,
@@ -240,6 +270,7 @@ def _enrich_one(
     except Exception as exc:
         _log_invalid_labels(article_id, exc)
         log.exception("Failed to enrich %s", article_id)
+        _record_exception(ch_client, ch_lock, article_id, str(exc))
         return False
 
 

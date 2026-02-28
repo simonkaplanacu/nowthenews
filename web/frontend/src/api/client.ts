@@ -269,3 +269,29 @@ export interface SearchMatch {
 export function fetchSearchMatches(params?: { search_id?: string; limit?: number }) {
   return get<SearchMatch[]>("/api/search-matches", params);
 }
+
+// --- Enrichment Exceptions ---
+
+export interface EnrichmentException {
+  article_id: string;
+  reason: string;
+  fail_count: number;
+  status: string;
+  updated_at: string;
+  title: string;
+  published_at: string;
+}
+
+export function fetchEnrichmentExceptions(params?: { status?: string; limit?: number }) {
+  return get<EnrichmentException[]>("/api/enrichment-exceptions", params);
+}
+
+export async function updateEnrichmentException(articleId: string, status: "skip" | "retry"): Promise<{ status: string }> {
+  const resp = await fetch(`/api/enrichment-exceptions/${encodeURIComponent(articleId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  return resp.json();
+}

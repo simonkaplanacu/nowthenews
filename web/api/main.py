@@ -1089,6 +1089,74 @@ def delete_saved_search(search_id: str):
     return {"status": "deleted", "search_id": search_id}
 
 
+# ---------------------------------------------------------------------------
+# Enrichment Exceptions
+# ---------------------------------------------------------------------------
+
+@app.get("/api/enrichment-exceptions")
+def get_enrichment_exceptions(
+    status: str | None = Query(None),
+    limit: int = Query(50),
+):
+    """List articles that repeatedly fail enrichment."""
+    ch = _get_ch()
+    conditions: list[str] = []
+    params: dict = {"limit": limit}
+
+    if status:
+        conditions.append("ex.status = %(status)s")
+        params["status"] = status
+
+    where = f"AND {' AND '.join(conditions)}" if conditions else ""
+    rows = ch.query(f"""
+        SELECT ex.article_id, ex.reason, ex.fail_count, ex.status, ex.updated_at,
+               a.title, a.published_at
+        FROM {_DB}.enrichment_exceptions AS ex FINAL
+        LEFT JOIN {_DB}.articles AS a FINAL ON a.article_id = ex.article_id
+        WHERE 1=1 {where}
+        ORDER BY ex.fail_count DESC, ex.updated_at DESC
+        LIMIT %(limit)s
+    """, parameters=params).result_rows
+    return [
+        {
+            "article_id": r[0], "reason": r[1], "fail_count": r[2],
+            "status": r[3],
+            "updated_at": r[4].isoformat() if r[4] else None,
+            "title": r[5],
+            "published_at": r[6].isoformat() if r[6] else None,
+        }
+        for r in rows
+    ]
+
+
+class ExceptionUpdate(BaseModel):
+    status: str  # 'skip' or 'retry'
+
+
+@app.post("/api/enrichment-exceptions/{article_id}")
+def update_enrichment_exception(article_id: str, body: ExceptionUpdate):
+    """Update status of an enrichment exception (skip or retry)."""
+    if body.status not in ("skip", "retry"):
+        from fastapi import HTTPException
+        raise HTTPException(400, "status must be 'skip' or 'retry'")
+
+    ch = _get_ch()
+    if body.status == "retry":
+        ch.command(
+            f"ALTER TABLE {_DB}.enrichment_exceptions DELETE "
+            f"WHERE article_id = %(aid)s",
+            parameters={"aid": article_id},
+        )
+        return {"status": "retry", "article_id": article_id}
+    else:
+        ch.command(
+            f"ALTER TABLE {_DB}.enrichment_exceptions UPDATE status = 'skip' "
+            f"WHERE article_id = %(aid)s",
+            parameters={"aid": article_id},
+        )
+        return {"status": "skip", "article_id": article_id}
+
+
 @app.get("/api/search-matches")
 def get_search_matches(
     search_id: str | None = Query(None),

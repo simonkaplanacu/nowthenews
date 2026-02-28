@@ -920,7 +920,7 @@ body {
 
 .alerts-columns {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 16px;
   max-width: 1400px;
   height: 100%;
@@ -1193,6 +1193,59 @@ body {
   font-size: 11px;
   color: var(--text-secondary);
   margin-top: 2px;
+}
+
+/* Enrichment Exceptions */
+.exception-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.exception-card.exception-skip {
+  opacity: 0.5;
+}
+.exception-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.exception-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.exception-reason {
+  font-size: 11px;
+  color: #e57373;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 6px;
+}
+.exception-actions {
+  display: flex;
+  gap: 6px;
+}
+.exception-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.exception-btn:hover {
+  background: var(--bg-surface);
+}
+.exception-skip {
+  color: #e57373;
+}
+.exception-retry {
+  color: #81c784;
 }
 
 /* Scrollbar styling */

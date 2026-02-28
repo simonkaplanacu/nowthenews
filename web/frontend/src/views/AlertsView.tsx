@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import type { Alert, SavedSearch, SearchMatch } from "../api/client";
+import type { Alert, SavedSearch, SearchMatch, EnrichmentException } from "../api/client";
 import {
   fetchAlerts,
   acknowledgeAlert,
@@ -7,6 +7,8 @@ import {
   createSavedSearch,
   deleteSavedSearch,
   fetchSearchMatches,
+  fetchEnrichmentExceptions,
+  updateEnrichmentException,
 } from "../api/client";
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -27,6 +29,7 @@ export default function AlertsView() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [searches, setSearches] = useState<SavedSearch[]>([]);
   const [matches, setMatches] = useState<SearchMatch[]>([]);
+  const [exceptions, setExceptions] = useState<EnrichmentException[]>([]);
   const [typeFilter, setTypeFilter] = useState("");
   const [showAcknowledged, setShowAcknowledged] = useState(false);
   const [newLabel, setNewLabel] = useState("");
@@ -44,8 +47,13 @@ export default function AlertsView() {
     fetchSearchMatches({ limit: 50 }).then(setMatches).catch(console.error);
   }, []);
 
+  const loadExceptions = useCallback(() => {
+    fetchEnrichmentExceptions({ limit: 50 }).then(setExceptions).catch(console.error);
+  }, []);
+
   useEffect(() => { loadAlerts(); }, [loadAlerts]);
   useEffect(() => { loadSearches(); }, [loadSearches]);
+  useEffect(() => { loadExceptions(); }, [loadExceptions]);
 
   const handleAcknowledge = async (id: string) => {
     await acknowledgeAlert(id);
@@ -63,6 +71,11 @@ export default function AlertsView() {
   const handleDeleteSearch = async (id: string) => {
     await deleteSavedSearch(id);
     loadSearches();
+  };
+
+  const handleException = async (articleId: string, status: "skip" | "retry") => {
+    await updateEnrichmentException(articleId, status);
+    loadExceptions();
   };
 
   return (
@@ -198,6 +211,43 @@ export default function AlertsView() {
                   {m.published_at && new Date(m.published_at).toLocaleDateString()}
                   {" — matched "}
                   {new Date(m.matched_at).toLocaleString()}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Enrichment Exceptions */}
+        <div className="alerts-section">
+          <div className="alerts-section-header">
+            <h2>Enrichment Exceptions</h2>
+          </div>
+          <div className="exceptions-list">
+            {exceptions.length === 0 && (
+              <div className="alerts-empty">No stuck articles</div>
+            )}
+            {exceptions.map((ex) => (
+              <div key={ex.article_id} className={`exception-card exception-${ex.status}`}>
+                <div className="exception-title">{ex.title || ex.article_id}</div>
+                <div className="exception-meta">
+                  {ex.fail_count} failures
+                  {ex.published_at && ` — published ${new Date(ex.published_at).toLocaleDateString()}`}
+                </div>
+                <div className="exception-reason">{ex.reason}</div>
+                <div className="exception-actions">
+                  {ex.status !== "skip" && (
+                    <button
+                      className="exception-btn exception-skip"
+                      onClick={() => handleException(ex.article_id, "skip")}
+                    >
+                      Skip
+                    </button>
+                  )}
+                  <button
+                    className="exception-btn exception-retry"
+                    onClick={() => handleException(ex.article_id, "retry")}
+                  >
+                    Retry
+                  </button>
                 </div>
               </div>
             ))}
