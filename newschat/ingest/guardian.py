@@ -19,7 +19,7 @@ from newschat.config import (
     GUARDIAN_SHOW_TAGS,
     GUARDIAN_TIMEOUT,
 )
-from newschat.models import Article, Tag
+from newschat.models import Article, LiveBlock, Tag
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +101,43 @@ def _parse_article(raw: dict) -> Article | None:
     except Exception:
         log.exception("Failed to parse article: %s", raw.get("id", "unknown"))
         return None
+
+
+def _parse_blocks(article_id: str, raw: dict) -> list[LiveBlock]:
+    """Parse live blog blocks from a raw Guardian API result."""
+    blocks_data = raw.get("blocks", {})
+    body_blocks = blocks_data.get("body", [])
+    if not body_blocks:
+        return []
+
+    result = []
+    for b in body_blocks:
+        block_id = b.get("id")
+        if not block_id:
+            continue
+        pub_str = b.get("firstPublishedDate") or b.get("publishedDate") or b.get("createdDate")
+        if not pub_str:
+            continue
+        try:
+            published_at = (
+                datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+                .astimezone(timezone.utc)
+                .replace(tzinfo=None)
+            )
+        except (ValueError, TypeError):
+            continue
+
+        body_text = strip_html(b.get("bodyHtml") or b.get("bodyTextSummary") or "")
+        title = b.get("title") or ""
+
+        result.append(LiveBlock(
+            article_id=article_id,
+            block_id=block_id,
+            title=title,
+            body_text=body_text,
+            published_at=published_at,
+        ))
+    return result
 
 
 class GuardianClient:
@@ -198,6 +235,7 @@ class GuardianClient:
         params: dict = {
             "show-fields": GUARDIAN_SHOW_FIELDS,
             "show-tags": GUARDIAN_SHOW_TAGS,
+            "show-blocks": "body",
             "order-by": order_by,
             "page": page,
             "page-size": page_size,
@@ -215,26 +253,43 @@ class GuardianClient:
         response = data["response"]
 
         articles = []
+        all_blocks: list[LiveBlock] = []
         for r in response.get("results") or []:
             article = _parse_article(r)
             if article is not None:
                 articles.append(article)
+                # Parse blocks for live blogs
+                if article.guardian_type == "liveblog":
+                    blocks = _parse_blocks(article.article_id, r)
+                    all_blocks.extend(blocks)
 
         total = response.get("total", 0)
         pages = response.get("pages", 0)
-        return articles, total, pages
+        return articles, total, pages, all_blocks
 
-    def get_article(self, article_id: str) -> Article | None:
-        """Fetch a single article by its ID."""
+    def get_article(
+        self, article_id: str, include_blocks: bool = False,
+    ) -> tuple[Article | None, list[LiveBlock]]:
+        """Fetch a single article by its ID.
+
+        Returns (article, blocks). blocks is empty unless include_blocks=True
+        and the article is a liveblog.
+        """
         params = {
             "show-fields": GUARDIAN_SHOW_FIELDS,
             "show-tags": GUARDIAN_SHOW_TAGS,
         }
+        if include_blocks:
+            params["show-blocks"] = "body"
         data = self._get(f"/{article_id}", params)
         content = data["response"].get("content")
         if not content:
-            return None
-        return _parse_article(content)
+            return None, []
+        article = _parse_article(content)
+        blocks: list[LiveBlock] = []
+        if article and include_blocks:
+            blocks = _parse_blocks(article.article_id, content)
+        return article, blocks
 
     def fetch_all(
         self,
@@ -243,16 +298,17 @@ class GuardianClient:
         section: str | None = None,
         query: str | None = None,
         order_by: str = "oldest",
-    ) -> Generator[Article, None, None]:
-        """Generator that yields all articles matching the query, handling pagination.
+    ) -> Generator[tuple[Article, list[LiveBlock]], None, None]:
+        """Generator that yields (article, blocks) tuples, handling pagination.
 
+        For non-liveblog articles, blocks will be an empty list.
         Uses oldest-first ordering by default for backfill.
         Sets self.pages_fetched as a side effect.
         """
         self.pages_fetched = 0
         page = 1
         while True:
-            articles, total, total_pages = self.search(
+            articles, total, total_pages, all_blocks = self.search(
                 query=query,
                 section=section,
                 from_date=from_date,
@@ -261,8 +317,14 @@ class GuardianClient:
                 order_by=order_by,
             )
             self.pages_fetched = page
+
+            # Index blocks by article_id for efficient lookup
+            blocks_by_article: dict[str, list[LiveBlock]] = {}
+            for b in all_blocks:
+                blocks_by_article.setdefault(b.article_id, []).append(b)
+
             for article in articles:
-                yield article
+                yield article, blocks_by_article.get(article.article_id, [])
 
             if page >= total_pages:
                 break

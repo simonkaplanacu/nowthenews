@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from newschat.config import CLICKHOUSE_DATABASE, INGEST_BATCH_SIZE
 from newschat.db import get_client as get_ch_client
 from newschat.ingest.guardian import GuardianClient
-from newschat.models import Article, article_column_names, article_to_row
+from newschat.models import Article, LiveBlock, article_column_names, article_to_row
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +34,31 @@ def _existing_ids(
     # ReplacingMergeTree provides a safety net — duplicate inserts are
     # eventually merged, so this is an optimisation, not the only defence.
     return {row[0] for row in result.result_rows}
+
+
+def _existing_block_ids(ch_client, article_id: str) -> set[str]:
+    """Get block IDs already stored for a liveblog article."""
+    result = ch_client.query(
+        f"SELECT block_id FROM {_DB}.liveblog_blocks FINAL "
+        f"WHERE article_id = %(aid)s",
+        parameters={"aid": article_id},
+    )
+    return {row[0] for row in result.result_rows}
+
+
+def _insert_blocks(ch_client, blocks: list[LiveBlock]) -> None:
+    """Insert liveblog blocks into ClickHouse."""
+    if not blocks:
+        return
+    rows = [
+        [b.article_id, b.block_id, b.title, b.body_text, b.published_at]
+        for b in blocks
+    ]
+    ch_client.insert(
+        f"{_DB}.liveblog_blocks",
+        rows,
+        column_names=["article_id", "block_id", "title", "body_text", "published_at"],
+    )
 
 
 def _insert_articles(ch_client, articles: list[Article]) -> None:
@@ -128,6 +153,7 @@ def ingest(
     new_count = 0
     pages = 0
     status = "ok"
+    new_blocks_by_article: dict[str, list[LiveBlock]] = {}
 
     try:
         _check_connectivity(ch)
@@ -142,7 +168,7 @@ def ingest(
 
         batch: list[Article] = []
 
-        for article in guardian.fetch_all(
+        for article, blocks in guardian.fetch_all(
             from_date=from_date,
             to_date=to_date,
             section=section,
@@ -153,6 +179,18 @@ def ingest(
             if article.article_id not in existing:
                 batch.append(article)
                 new_count += 1
+
+            # Process liveblog blocks — detect new ones
+            if blocks:
+                stored_block_ids = _existing_block_ids(ch, article.article_id)
+                new_blocks = [b for b in blocks if b.block_id not in stored_block_ids]
+                if new_blocks:
+                    _insert_blocks(ch, new_blocks)
+                    new_blocks_by_article[article.article_id] = new_blocks
+                    log.info(
+                        "Liveblog %s: %d new blocks (of %d total)",
+                        article.article_id, len(new_blocks), len(blocks),
+                    )
 
             if len(batch) >= INGEST_BATCH_SIZE:
                 _insert_articles(ch, batch)
@@ -186,6 +224,7 @@ def ingest(
         guardian.close()
         ch.close()
 
+    total_new_blocks = sum(len(bs) for bs in new_blocks_by_article.values())
     summary = {
         "source": "guardian",
         "from_date": from_date.isoformat(),
@@ -194,6 +233,13 @@ def ingest(
         "articles_new": new_count,
         "pages_fetched": pages,
         "status": status,
+        "liveblogs_updated": len(new_blocks_by_article),
+        "new_blocks": total_new_blocks,
+        "new_blocks_by_article": {
+            aid: [(b.title, b.block_id) for b in bs]
+            for aid, bs in new_blocks_by_article.items()
+        },
     }
-    log.info("Ingestion complete: %s", summary)
+    log.info("Ingestion complete: %s articles_new=%d, new_blocks=%d",
+             status, new_count, total_new_blocks)
     return summary

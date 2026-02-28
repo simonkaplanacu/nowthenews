@@ -606,7 +606,7 @@ def db_stats() -> dict:
     stats = {}
     # ReplacingMergeTree tables — use FINAL for accurate deduped counts
     for table in ("articles", "article_tags", "article_enrichment",
-                  "article_regions", "article_topics"):
+                  "article_regions", "article_topics", "liveblog_blocks"):
         stats[table] = _scalar(f"SELECT count() FROM {_DB}.{table} FINAL")
     # Plain MergeTree tables
     for table in ("enrichment_log", "ingestion_log"):
@@ -813,6 +813,58 @@ def list_search_matches(
         LIMIT {{limit:UInt32}}
     """
     return _query(sql, params)
+
+
+# ---------------------------------------------------------------------------
+# Liveblog tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def get_liveblog_blocks(
+    article_id: str,
+    limit: int = 50,
+) -> list[dict]:
+    """Get individual blocks from a live blog article.
+
+    Args:
+        article_id: The liveblog article identifier
+        limit: Max blocks to return (1-200, default 50)
+    """
+    limit = max(1, min(limit, 200))
+    sql = f"""
+        SELECT block_id, title, body_text, published_at
+        FROM {_DB}.liveblog_blocks FINAL
+        WHERE article_id = {{article_id:String}}
+        ORDER BY published_at DESC
+        LIMIT {{limit:UInt32}}
+    """
+    return _query(sql, {"article_id": article_id, "limit": limit})
+
+
+@mcp.tool()
+def search_liveblog_blocks(
+    query: str,
+    limit: int = 20,
+) -> list[dict]:
+    """Search across liveblog block text and titles.
+
+    Args:
+        query: Search text (case-insensitive substring)
+        limit: Max results (1-100, default 20)
+    """
+    limit = max(1, min(limit, 100))
+    sql = f"""
+        SELECT lb.article_id, lb.block_id, lb.title, lb.body_text, lb.published_at,
+               a.title AS article_title
+        FROM {_DB}.liveblog_blocks AS lb FINAL
+        LEFT JOIN {_DB}.articles AS a FINAL ON a.article_id = lb.article_id
+        WHERE positionCaseInsensitive(lb.body_text, {{query:String}}) > 0
+           OR positionCaseInsensitive(lb.title, {{query:String}}) > 0
+        ORDER BY lb.published_at DESC
+        LIMIT {{limit:UInt32}}
+    """
+    return _query(sql, {"query": query, "limit": limit})
 
 
 # ---------------------------------------------------------------------------

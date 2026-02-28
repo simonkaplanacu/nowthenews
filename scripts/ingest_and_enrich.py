@@ -68,7 +68,7 @@ def _check_stale_db():
 
 
 def _run_saved_search_matching():
-    """Match active saved searches against articles from the last 24h."""
+    """Match active saved searches against articles and liveblog blocks from the last 24h."""
     try:
         from newschat.db import get_client
         from newschat.config import CLICKHOUSE_DATABASE
@@ -85,13 +85,18 @@ def _run_saved_search_matching():
 
             for search_id, label, query in searches:
                 # Find articles from last 24h matching the search query
+                # Also match against liveblog block text
                 match_result = client.query(
-                    f"""SELECT a.article_id
+                    f"""SELECT DISTINCT a.article_id
                         FROM {_DB}.articles a FINAL
                         LEFT JOIN {_DB}.search_matches m
                           ON m.article_id = a.article_id AND m.search_id = %(sid)s
+                        LEFT JOIN {_DB}.liveblog_blocks lb FINAL
+                          ON lb.article_id = a.article_id
                         WHERE (positionCaseInsensitive(a.title, %(q)s) > 0
-                            OR positionCaseInsensitive(a.body_text, %(q)s) > 0)
+                            OR positionCaseInsensitive(a.body_text, %(q)s) > 0
+                            OR positionCaseInsensitive(lb.body_text, %(q)s) > 0
+                            OR positionCaseInsensitive(lb.title, %(q)s) > 0)
                           AND a.published_at >= now() - INTERVAL 24 HOUR
                           AND m.match_id IS NULL""",
                     parameters={"q": query, "sid": search_id},
@@ -154,6 +159,18 @@ def main():
         from_date = to_date - timedelta(days=1)
         result = ingest(from_date=from_date, to_date=to_date)
         log.info("Ingestion complete: %s", result)
+
+        # Alert on liveblog updates
+        if isinstance(result, dict) and result.get("new_blocks", 0) > 0:
+            for aid, block_info in result.get("new_blocks_by_article", {}).items():
+                titles = [t for t, _ in block_info if t]
+                summary_text = "; ".join(titles[:5]) if titles else f"{len(block_info)} new updates"
+                _write_alert(
+                    "liveblog_update", "info",
+                    f"Live blog updated: {len(block_info)} new block(s) — {summary_text}",
+                    json.dumps({"article_id": aid, "new_block_count": len(block_info),
+                                "block_titles": titles[:10]}),
+                )
 
         # Check for zero articles
         if isinstance(result, dict) and result.get("articles_new") == 0:

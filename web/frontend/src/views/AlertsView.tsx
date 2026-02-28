@@ -23,6 +23,7 @@ const TYPE_LABELS: Record<string, string> = {
   ingestion_failure: "Ingestion Failure",
   stale_db: "Stale DB",
   search_match: "Search Match",
+  liveblog_update: "Live Blog Update",
 };
 
 export default function AlertsView() {

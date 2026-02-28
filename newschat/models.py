@@ -14,6 +14,17 @@ class Tag(TypedDict):
 
 
 @dataclass
+class LiveBlock:
+    """A single block from a Guardian live blog."""
+
+    article_id: str
+    block_id: str
+    title: str
+    body_text: str
+    published_at: datetime
+
+
+@dataclass
 class Article:
     """Normalised article ready for storage."""
 

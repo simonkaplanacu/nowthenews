@@ -114,6 +114,15 @@ ORDER BY (search_id)""",
     matched_at      DateTime('UTC') DEFAULT now()
 ) ENGINE = MergeTree()
 ORDER BY (matched_at, search_id, article_id)""",
+    f"""CREATE TABLE IF NOT EXISTS {_DB}.liveblog_blocks (
+    article_id      String,
+    block_id        String,
+    title           String DEFAULT '',
+    body_text       String,
+    published_at    DateTime('UTC'),
+    ingested_at     DateTime('UTC') DEFAULT now()
+) ENGINE = ReplacingMergeTree(ingested_at)
+ORDER BY (article_id, block_id)""",
     f"""CREATE TABLE IF NOT EXISTS {_DB}.enrichment_exceptions (
     article_id      String,
     reason          String DEFAULT '',

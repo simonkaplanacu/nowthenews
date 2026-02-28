@@ -270,6 +270,29 @@ export function fetchSearchMatches(params?: { search_id?: string; limit?: number
   return get<SearchMatch[]>("/api/search-matches", params);
 }
 
+// --- Liveblog Blocks ---
+
+export interface LiveBlock {
+  article_id: string;
+  block_id: string;
+  title: string;
+  body_text: string;
+  published_at: string;
+}
+
+export interface LiveBlockSearchResult extends LiveBlock {
+  article_title: string;
+  article_url: string;
+}
+
+export function fetchLiveblogBlocks(articleId: string, limit?: number) {
+  return get<LiveBlock[]>(`/api/liveblog-blocks/${encodeURIComponent(articleId)}`, { limit });
+}
+
+export function searchLiveblogBlocks(q: string, limit?: number) {
+  return get<LiveBlockSearchResult[]>("/api/liveblog-search", { q, limit });
+}
+
 // --- Enrichment Exceptions ---
 
 export interface EnrichmentException {

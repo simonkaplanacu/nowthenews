@@ -1157,6 +1157,67 @@ def update_enrichment_exception(article_id: str, body: ExceptionUpdate):
         return {"status": "skip", "article_id": article_id}
 
 
+# ---------------------------------------------------------------------------
+# Liveblog Blocks
+# ---------------------------------------------------------------------------
+
+@app.get("/api/liveblog-blocks/{article_id}")
+def get_liveblog_blocks(
+    article_id: str,
+    limit: int = Query(200),
+):
+    """Get liveblog blocks for an article, newest first."""
+    ch = _get_ch()
+    rows = ch.query(f"""
+        SELECT block_id, title, body_text, published_at
+        FROM {_DB}.liveblog_blocks FINAL
+        WHERE article_id = %(aid)s
+        ORDER BY published_at DESC
+        LIMIT %(limit)s
+    """, parameters={"aid": article_id, "limit": limit}).result_rows
+    return [
+        {
+            "article_id": article_id,
+            "block_id": r[0],
+            "title": r[1],
+            "body_text": r[2],
+            "published_at": r[3].isoformat() if r[3] else None,
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/liveblog-search")
+def search_liveblog_blocks(
+    q: str = Query(..., min_length=2),
+    limit: int = Query(50),
+):
+    """Search across liveblog block text."""
+    ch = _get_ch()
+    rows = ch.query(f"""
+        SELECT lb.article_id, lb.block_id, lb.title, lb.body_text, lb.published_at,
+               a.title AS article_title, a.url
+        FROM {_DB}.liveblog_blocks lb FINAL
+        INNER JOIN {_DB}.articles a FINAL ON a.article_id = lb.article_id
+        WHERE positionCaseInsensitive(lb.body_text, %(q)s) > 0
+           OR positionCaseInsensitive(lb.title, %(q)s) > 0
+        ORDER BY lb.published_at DESC
+        LIMIT %(limit)s
+    """, parameters={"q": q, "limit": limit}).result_rows
+    return [
+        {
+            "article_id": r[0],
+            "block_id": r[1],
+            "title": r[2],
+            "body_text": r[3][:500],  # Truncate for listing
+            "published_at": r[4].isoformat() if r[4] else None,
+            "article_title": r[5],
+            "article_url": r[6],
+        }
+        for r in rows
+    ]
+
+
 @app.get("/api/search-matches")
 def get_search_matches(
     search_id: str | None = Query(None),
