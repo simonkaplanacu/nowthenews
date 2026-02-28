@@ -8,8 +8,11 @@ from datetime import datetime, timezone
 
 import clickhouse_connect
 import httpx
+import uuid
+
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from newschat.config import CLICKHOUSE_DATABASE, CLICKHOUSE_DSN, GROQ_API_KEY
 
@@ -971,3 +974,151 @@ def get_stats():
         LEFT JOIN {_DB}.article_enrichment e FINAL ON e.article_id = a.article_id AND e.prompt_version = %(pv)s
     """, parameters=params).result_rows[0]
     return {"total_articles": row[0], "enriched_articles": row[1]}
+
+
+# ---------------------------------------------------------------------------
+# Alerts & Saved Searches
+# ---------------------------------------------------------------------------
+
+@app.get("/api/alerts")
+def get_alerts(
+    alert_type: str | None = Query(None),
+    severity: str | None = Query(None),
+    acknowledged: int | None = Query(None),
+    limit: int = Query(50),
+):
+    """List system alerts."""
+    ch = _get_ch()
+    conditions: list[str] = []
+    params: dict = {"limit": limit}
+
+    if alert_type:
+        conditions.append("alert_type = %(alert_type)s")
+        params["alert_type"] = alert_type
+    if severity:
+        conditions.append("severity = %(severity)s")
+        params["severity"] = severity
+    if acknowledged is not None:
+        conditions.append("acknowledged = %(ack)s")
+        params["ack"] = acknowledged
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    rows = ch.query(f"""
+        SELECT alert_id, alert_type, severity, message, context,
+               created_at, acknowledged
+        FROM {_DB}.alerts
+        {where}
+        ORDER BY created_at DESC
+        LIMIT %(limit)s
+    """, parameters=params).result_rows
+    return [
+        {
+            "alert_id": str(r[0]), "alert_type": r[1], "severity": r[2],
+            "message": r[3], "context": r[4],
+            "created_at": r[5].isoformat() if r[5] else None,
+            "acknowledged": r[6],
+        }
+        for r in rows
+    ]
+
+
+@app.post("/api/alerts/{alert_id}/acknowledge")
+def acknowledge_alert(alert_id: str):
+    """Mark an alert as acknowledged."""
+    ch = _get_ch()
+    ch.command(
+        f"ALTER TABLE {_DB}.alerts UPDATE acknowledged = 1 "
+        f"WHERE alert_id = %(alert_id)s",
+        parameters={"alert_id": alert_id},
+    )
+    return {"status": "acknowledged", "alert_id": alert_id}
+
+
+class SavedSearchCreate(BaseModel):
+    label: str
+    query: str
+    email: str = ""
+
+
+@app.get("/api/saved-searches")
+def get_saved_searches():
+    """List all active saved searches."""
+    ch = _get_ch()
+    rows = ch.query(f"""
+        SELECT search_id, label, query, email, active, created_at
+        FROM {_DB}.saved_searches FINAL
+        WHERE active = 1
+        ORDER BY created_at DESC
+    """).result_rows
+    return [
+        {
+            "search_id": str(r[0]), "label": r[1], "query": r[2],
+            "email": r[3], "active": r[4],
+            "created_at": r[5].isoformat() if r[5] else None,
+        }
+        for r in rows
+    ]
+
+
+@app.post("/api/saved-searches")
+def create_saved_search(body: SavedSearchCreate):
+    """Create a new saved search."""
+    ch = _get_ch()
+    search_id = str(uuid.uuid4())
+    ch.command(
+        f"INSERT INTO {_DB}.saved_searches (search_id, label, query, email) "
+        f"VALUES (%(id)s, %(label)s, %(query)s, %(email)s)",
+        parameters={"id": search_id, "label": body.label, "query": body.query, "email": body.email},
+    )
+    return {"search_id": search_id, "label": body.label, "query": body.query}
+
+
+@app.delete("/api/saved-searches/{search_id}")
+def delete_saved_search(search_id: str):
+    """Soft-delete a saved search."""
+    ch = _get_ch()
+    ch.command(
+        f"ALTER TABLE {_DB}.saved_searches UPDATE active = 0 "
+        f"WHERE search_id = %(id)s",
+        parameters={"id": search_id},
+    )
+    return {"status": "deleted", "search_id": search_id}
+
+
+@app.get("/api/search-matches")
+def get_search_matches(
+    search_id: str | None = Query(None),
+    limit: int = Query(50),
+):
+    """List matched articles for saved searches."""
+    ch = _get_ch()
+    conditions: list[str] = []
+    params: dict = {"limit": limit}
+
+    if search_id:
+        conditions.append("m.search_id = %(sid)s")
+        params["sid"] = search_id
+
+    where = f"AND {' AND '.join(conditions)}" if conditions else ""
+    rows = ch.query(f"""
+        SELECT m.match_id, m.search_id, m.article_id, m.matched_at,
+               s.label, s.query,
+               a.title, a.published_at, a.url
+        FROM {_DB}.search_matches AS m
+        LEFT JOIN {_DB}.saved_searches AS s FINAL ON s.search_id = m.search_id
+        LEFT JOIN {_DB}.articles AS a FINAL ON a.article_id = m.article_id
+        WHERE 1=1 {where}
+        ORDER BY m.matched_at DESC
+        LIMIT %(limit)s
+    """, parameters=params).result_rows
+    return [
+        {
+            "match_id": str(r[0]), "search_id": str(r[1]), "article_id": r[2],
+            "matched_at": r[3].isoformat() if r[3] else None,
+            "search_label": r[4], "search_query": r[5],
+            "title": r[6],
+            "published_at": r[7].isoformat() if r[7] else None,
+            "url": r[8],
+        }
+        for r in rows
+    ]

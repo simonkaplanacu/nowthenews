@@ -7,6 +7,7 @@ import TimelineView from "./views/TimelineView";
 import GeoView from "./views/GeoView";
 import CompareView from "./views/CompareView";
 import DashboardView from "./views/DashboardView";
+import AlertsView from "./views/AlertsView";
 import { FilterProvider } from "./context/FilterContext";
 import FilterBar from "./components/FilterBar";
 import "./App.css";
@@ -42,6 +43,9 @@ function AppContent() {
             <NavLink to="/search" className={({ isActive }) => isActive ? "tab active" : "tab"}>
               Search
             </NavLink>
+            <NavLink to="/alerts" className={({ isActive }) => isActive ? "tab active" : "tab"}>
+              Alerts
+            </NavLink>
           </nav>
           <FilterBar />
         </header>
@@ -55,6 +59,7 @@ function AppContent() {
             <Route path="/geo" element={<GeoView />} />
             <Route path="/compare" element={<CompareView />} />
             <Route path="/search" element={<SearchView />} />
+            <Route path="/alerts" element={<AlertsView />} />
           </Routes>
         </main>
       </div>

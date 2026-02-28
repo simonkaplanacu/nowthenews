@@ -198,3 +198,74 @@ export interface TopicTrendsData {
 export function fetchTopicTrends(filters?: { weeks?: number; region?: string }) {
   return get<TopicTrendsData>("/api/topic-trends", filters);
 }
+
+// --- Alerts ---
+
+export interface Alert {
+  alert_id: string;
+  alert_type: string;
+  severity: string;
+  message: string;
+  context: string;
+  created_at: string;
+  acknowledged: number;
+}
+
+export function fetchAlerts(params?: { alert_type?: string; severity?: string; acknowledged?: number; limit?: number }) {
+  return get<Alert[]>("/api/alerts", params);
+}
+
+export async function acknowledgeAlert(alertId: string): Promise<{ status: string }> {
+  const resp = await fetch(`/api/alerts/${alertId}/acknowledge`, { method: "POST" });
+  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  return resp.json();
+}
+
+// --- Saved Searches ---
+
+export interface SavedSearch {
+  search_id: string;
+  label: string;
+  query: string;
+  email: string;
+  active: number;
+  created_at: string;
+}
+
+export function fetchSavedSearches() {
+  return get<SavedSearch[]>("/api/saved-searches");
+}
+
+export async function createSavedSearch(label: string, query: string): Promise<{ search_id: string }> {
+  const resp = await fetch("/api/saved-searches", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, query }),
+  });
+  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  return resp.json();
+}
+
+export async function deleteSavedSearch(searchId: string): Promise<{ status: string }> {
+  const resp = await fetch(`/api/saved-searches/${searchId}`, { method: "DELETE" });
+  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  return resp.json();
+}
+
+// --- Search Matches ---
+
+export interface SearchMatch {
+  match_id: string;
+  search_id: string;
+  article_id: string;
+  matched_at: string;
+  search_label: string;
+  search_query: string;
+  title: string;
+  published_at: string;
+  url: string;
+}
+
+export function fetchSearchMatches(params?: { search_id?: string; limit?: number }) {
+  return get<SearchMatch[]>("/api/search-matches", params);
+}

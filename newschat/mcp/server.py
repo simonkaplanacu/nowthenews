@@ -9,8 +9,10 @@ Future writes gated behind MCP_ENABLE_WRITES (not yet implemented).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -65,9 +67,9 @@ def _scalar(sql: str, parameters: dict | None = None):
 mcp = FastMCP(
     "nowthenews",
     instructions=(
-        "Read-only access to news articles enriched with entities, sentiment, "
+        "Access to news articles enriched with entities, sentiment, "
         "policy domains, smoke terms, quotes, geographic relevance, topics, "
-        "and content type classifications."
+        "and content type classifications. Also manages system alerts and saved searches."
     ),
 )
 
@@ -649,6 +651,160 @@ def benchmark_results() -> dict:
         "models": model_rows,
         "note": "Run scripts/benchmark_compare.py for full quality analysis",
     }
+
+
+# ---------------------------------------------------------------------------
+# Alert & Saved Search tools
+# ---------------------------------------------------------------------------
+
+
+def _command(sql: str, parameters: dict | None = None):
+    """Run a write command (INSERT, ALTER, etc.)."""
+    client = get_client()
+    try:
+        client.command(sql, parameters=parameters)
+    finally:
+        client.close()
+
+
+@mcp.tool()
+def list_alerts(
+    alert_type: str | None = None,
+    severity: str | None = None,
+    acknowledged: bool | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """List system alerts (enrichment crashes, API limits, ingestion failures, stale DB, search matches).
+
+    Args:
+        alert_type: Filter by type (enrichment_crash, api_limit, ingestion_failure, stale_db, search_match)
+        severity: Filter by severity (info, warning, critical)
+        acknowledged: Filter by acknowledged status (true/false)
+        limit: Max results (1-200, default 50)
+    """
+    limit = max(1, min(limit, 200))
+    conditions: list[str] = []
+    params: dict = {"limit": limit}
+
+    if alert_type:
+        conditions.append("alert_type = {alert_type:String}")
+        params["alert_type"] = alert_type
+    if severity:
+        conditions.append("severity = {severity:String}")
+        params["severity"] = severity
+    if acknowledged is not None:
+        conditions.append("acknowledged = {ack:UInt8}")
+        params["ack"] = 1 if acknowledged else 0
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    sql = f"""
+        SELECT alert_id, alert_type, severity, message, context,
+               created_at, acknowledged
+        FROM {_DB}.alerts
+        {where}
+        ORDER BY created_at DESC
+        LIMIT {{limit:UInt32}}
+    """
+    return _query(sql, params)
+
+
+@mcp.tool()
+def acknowledge_alert(alert_id: str) -> dict:
+    """Mark an alert as acknowledged.
+
+    Args:
+        alert_id: The UUID of the alert to acknowledge
+    """
+    # ClickHouse MergeTree is append-only; use ALTER to update
+    _command(
+        f"ALTER TABLE {_DB}.alerts UPDATE acknowledged = 1 "
+        f"WHERE alert_id = %(alert_id)s",
+        parameters={"alert_id": alert_id},
+    )
+    return {"status": "acknowledged", "alert_id": alert_id}
+
+
+@mcp.tool()
+def create_saved_search(
+    label: str,
+    query: str,
+    email: str = "",
+) -> dict:
+    """Create a saved search to track articles matching a keyword/phrase.
+
+    New articles matching the search query will generate alerts.
+
+    Args:
+        label: Human-readable name for this search (e.g. "David Pocock")
+        query: Search term to match against article titles and body text
+        email: Optional email for future notifications
+    """
+    search_id = str(uuid.uuid4())
+    _command(
+        f"INSERT INTO {_DB}.saved_searches (search_id, label, query, email) "
+        f"VALUES (%(id)s, %(label)s, %(query)s, %(email)s)",
+        parameters={"id": search_id, "label": label, "query": query, "email": email},
+    )
+    return {"search_id": search_id, "label": label, "query": query}
+
+
+@mcp.tool()
+def list_saved_searches() -> list[dict]:
+    """List all saved searches."""
+    return _query(
+        f"SELECT search_id, label, query, email, active, created_at "
+        f"FROM {_DB}.saved_searches FINAL "
+        f"ORDER BY created_at DESC"
+    )
+
+
+@mcp.tool()
+def delete_saved_search(search_id: str) -> dict:
+    """Delete a saved search by its ID.
+
+    Args:
+        search_id: The UUID of the saved search to delete
+    """
+    _command(
+        f"ALTER TABLE {_DB}.saved_searches UPDATE active = 0 "
+        f"WHERE search_id = %(id)s",
+        parameters={"id": search_id},
+    )
+    return {"status": "deleted", "search_id": search_id}
+
+
+@mcp.tool()
+def list_search_matches(
+    search_id: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Show articles that matched a saved search.
+
+    Args:
+        search_id: Filter to a specific saved search UUID
+        limit: Max results (1-200, default 50)
+    """
+    limit = max(1, min(limit, 200))
+    conditions: list[str] = []
+    params: dict = {"limit": limit}
+
+    if search_id:
+        conditions.append("m.search_id = {search_id:String}")
+        params["search_id"] = search_id
+
+    where = f"AND {' AND '.join(conditions)}" if conditions else ""
+    sql = f"""
+        SELECT m.match_id, m.search_id, m.article_id, m.matched_at,
+               s.label AS search_label, s.query AS search_query,
+               a.title, a.published_at, a.url
+        FROM {_DB}.search_matches AS m
+        LEFT JOIN {_DB}.saved_searches AS s FINAL ON s.search_id = m.search_id
+        LEFT JOIN {_DB}.articles AS a FINAL ON a.article_id = m.article_id
+        WHERE 1=1 {where}
+        ORDER BY m.matched_at DESC
+        LIMIT {{limit:UInt32}}
+    """
+    return _query(sql, params)
 
 
 # ---------------------------------------------------------------------------

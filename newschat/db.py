@@ -88,6 +88,32 @@ ORDER BY (model, run_at)""",
     status          LowCardinality(String)
 ) ENGINE = MergeTree()
 ORDER BY (source, run_at)""",
+    f"""CREATE TABLE IF NOT EXISTS {_DB}.alerts (
+    alert_id        UUID DEFAULT generateUUIDv4(),
+    alert_type      LowCardinality(String),
+    severity        LowCardinality(String),
+    message         String,
+    context         String DEFAULT '',
+    created_at      DateTime('UTC') DEFAULT now(),
+    acknowledged    UInt8 DEFAULT 0
+) ENGINE = MergeTree()
+ORDER BY (created_at, alert_id)""",
+    f"""CREATE TABLE IF NOT EXISTS {_DB}.saved_searches (
+    search_id       UUID DEFAULT generateUUIDv4(),
+    label           String,
+    query           String,
+    email           String DEFAULT '',
+    active          UInt8 DEFAULT 1,
+    created_at      DateTime('UTC') DEFAULT now()
+) ENGINE = ReplacingMergeTree(created_at)
+ORDER BY (search_id)""",
+    f"""CREATE TABLE IF NOT EXISTS {_DB}.search_matches (
+    match_id        UUID DEFAULT generateUUIDv4(),
+    search_id       UUID,
+    article_id      String,
+    matched_at      DateTime('UTC') DEFAULT now()
+) ENGINE = MergeTree()
+ORDER BY (matched_at, search_id, article_id)""",
 ]
 
 
@@ -106,6 +132,36 @@ _MIGRATIONS = [
     f"ALTER TABLE {_DB}.articles ADD COLUMN IF NOT EXISTS production_office LowCardinality(String) DEFAULT ''",
     f"ALTER TABLE {_DB}.article_enrichment ADD COLUMN IF NOT EXISTS content_type LowCardinality(String) DEFAULT ''",
 ]
+
+
+def write_alert(
+    alert_type: str,
+    severity: str,
+    message: str,
+    context: str = "",
+):
+    """Write an alert to the alerts table.
+
+    Args:
+        alert_type: enrichment_crash, api_limit, ingestion_failure, stale_db, search_match
+        severity: info, warning, critical
+        message: Human-readable alert message
+        context: JSON string with additional details
+    """
+    client = get_client()
+    try:
+        client.command(
+            f"INSERT INTO {_DB}.alerts (alert_type, severity, message, context) "
+            f"VALUES (%(type)s, %(severity)s, %(message)s, %(context)s)",
+            parameters={
+                "type": alert_type,
+                "severity": severity,
+                "message": message,
+                "context": context,
+            },
+        )
+    finally:
+        client.close()
 
 
 def init_schema():

@@ -3,16 +3,109 @@
 
 Designed to run unattended via launchctl every 8 hours.
 """
+import json
 import logging
 import subprocess
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
 )
 log = logging.getLogger(__name__)
+
+
+def _write_alert(alert_type: str, severity: str, message: str, context: str = ""):
+    """Write an alert to ClickHouse (best-effort, never raises)."""
+    try:
+        from newschat.db import write_alert
+        write_alert(alert_type, severity, message, context)
+        log.info("Alert written: [%s] %s", alert_type, message)
+    except Exception:
+        log.exception("Failed to write alert")
+
+
+def _check_stale_db():
+    """Write a stale_db alert if latest article is >24h old."""
+    try:
+        from newschat.db import get_client
+        from newschat.config import CLICKHOUSE_DATABASE
+        client = get_client()
+        try:
+            latest = client.command(
+                f"SELECT max(published_at) FROM {CLICKHOUSE_DATABASE}.articles FINAL"
+            )
+        finally:
+            client.close()
+
+        if latest:
+            if isinstance(latest, str):
+                latest = datetime.fromisoformat(latest)
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - latest
+            if age > timedelta(hours=24):
+                _write_alert(
+                    "stale_db", "warning",
+                    f"No new articles in {age.total_seconds() / 3600:.0f}h (latest: {latest.isoformat()})",
+                    json.dumps({"latest_article": latest.isoformat(), "age_hours": round(age.total_seconds() / 3600, 1)}),
+                )
+    except Exception:
+        log.exception("Stale DB check failed")
+
+
+def _run_saved_search_matching():
+    """Match active saved searches against articles from the last 24h."""
+    try:
+        from newschat.db import get_client
+        from newschat.config import CLICKHOUSE_DATABASE
+        _DB = CLICKHOUSE_DATABASE
+        client = get_client()
+        try:
+            # Get active saved searches
+            result = client.query(
+                f"SELECT search_id, label, query FROM {_DB}.saved_searches FINAL WHERE active = 1"
+            )
+            searches = [(str(r[0]), r[1], r[2]) for r in result.result_rows]
+            if not searches:
+                return
+
+            for search_id, label, query in searches:
+                # Find articles from last 24h matching the search query
+                match_result = client.query(
+                    f"""SELECT a.article_id
+                        FROM {_DB}.articles a FINAL
+                        LEFT JOIN {_DB}.search_matches m
+                          ON m.article_id = a.article_id AND m.search_id = %(sid)s
+                        WHERE (positionCaseInsensitive(a.title, %(q)s) > 0
+                            OR positionCaseInsensitive(a.body_text, %(q)s) > 0)
+                          AND a.published_at >= now() - INTERVAL 24 HOUR
+                          AND m.match_id IS NULL""",
+                    parameters={"q": query, "sid": search_id},
+                )
+                new_matches = [r[0] for r in match_result.result_rows]
+                if not new_matches:
+                    continue
+
+                # Insert matches
+                for article_id in new_matches:
+                    client.command(
+                        f"INSERT INTO {_DB}.search_matches (search_id, article_id) "
+                        f"VALUES (%(sid)s, %(aid)s)",
+                        parameters={"sid": search_id, "aid": article_id},
+                    )
+
+                _write_alert(
+                    "search_match", "info",
+                    f"Saved search '{label}' matched {len(new_matches)} new article(s)",
+                    json.dumps({"search_id": search_id, "label": label, "match_count": len(new_matches)}),
+                )
+                log.info("Search '%s' matched %d new articles", label, len(new_matches))
+        finally:
+            client.close()
+    except Exception:
+        log.exception("Saved search matching failed")
 
 
 def main():
@@ -25,10 +118,23 @@ def main():
         from_date = to_date - timedelta(days=2)
         result = ingest(from_date=from_date, to_date=to_date)
         log.info("Ingestion complete: %s", result)
-    except Exception:
+
+        # Check for zero articles
+        if hasattr(result, "articles_new") and result.articles_new == 0:
+            _write_alert(
+                "ingestion_failure", "warning",
+                "Ingestion returned 0 new articles",
+                json.dumps({"from_date": str(from_date), "to_date": str(to_date)}),
+            )
+    except Exception as exc:
         log.exception("Ingestion failed")
-        # Continue to enrichment even if ingestion fails —
-        # there may be unenriched articles from previous runs
+        _write_alert(
+            "ingestion_failure", "critical",
+            f"Ingestion crashed: {exc}",
+        )
+
+    # Check for stale database
+    _check_stale_db()
 
     # --- Enrich unenriched articles ---
     log.info("Starting enrichment coordinator...")
@@ -46,10 +152,28 @@ def main():
             capture_output=False,
         )
         log.info("Enrichment coordinator exited with code %d", proc.returncode)
+        if proc.returncode != 0:
+            _write_alert(
+                "enrichment_crash", "critical",
+                f"Enrichment coordinator exited with code {proc.returncode}",
+                json.dumps({"returncode": proc.returncode}),
+            )
     except subprocess.TimeoutExpired:
         log.warning("Enrichment coordinator timed out after 7 hours")
-    except Exception:
+        _write_alert(
+            "enrichment_crash", "warning",
+            "Enrichment coordinator timed out after 7 hours",
+        )
+    except Exception as exc:
         log.exception("Enrichment coordinator failed")
+        _write_alert(
+            "enrichment_crash", "critical",
+            f"Enrichment coordinator exception: {exc}",
+        )
+
+    # --- Match saved searches against newly ingested articles ---
+    log.info("Running saved search matching...")
+    _run_saved_search_matching()
 
     log.info("Done.")
 

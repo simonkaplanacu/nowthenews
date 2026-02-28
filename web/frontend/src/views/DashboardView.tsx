@@ -6,6 +6,7 @@ import TimelineView from "./TimelineView";
 import GeoView from "./GeoView";
 import CompareView from "./CompareView";
 import SearchView from "./SearchView";
+import AlertsView from "./AlertsView";
 
 const VIEW_OPTIONS = [
   { id: "graph", label: "Graph" },
@@ -15,6 +16,7 @@ const VIEW_OPTIONS = [
   { id: "geo", label: "Regions" },
   { id: "compare", label: "Compare" },
   { id: "search", label: "Search" },
+  { id: "alerts", label: "Alerts" },
 ] as const;
 
 type ViewId = (typeof VIEW_OPTIONS)[number]["id"];
@@ -28,6 +30,7 @@ function renderView(id: ViewId) {
     case "geo": return <GeoView />;
     case "compare": return <CompareView />;
     case "search": return <SearchView />;
+    case "alerts": return <AlertsView />;
   }
 }
 

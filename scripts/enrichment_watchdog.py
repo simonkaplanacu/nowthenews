@@ -80,11 +80,23 @@ def find_coordinator_pid() -> int | None:
 
 
 def kill_coordinator(pid: int, error_count: int):
-    """Kill the coordinator and log the reason."""
+    """Kill the coordinator, log the reason, and write a DB alert."""
     log.warning(
         "Killing coordinator (PID %d) — %d errors in last %d minutes",
         pid, error_count, WINDOW_MINUTES,
     )
+    # Write alert to ClickHouse
+    try:
+        import json
+        from newschat.db import write_alert
+        write_alert(
+            "api_limit", "critical",
+            f"Watchdog killed coordinator (PID {pid}) — {error_count} API errors in {WINDOW_MINUTES}min",
+            json.dumps({"pid": pid, "error_count": error_count, "window_minutes": WINDOW_MINUTES}),
+        )
+    except Exception as e:
+        log.warning("Failed to write alert to DB: %s", e)
+
     try:
         os.kill(pid, signal.SIGTERM)
         log.info("Sent SIGTERM to PID %d", pid)
