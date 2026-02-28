@@ -270,6 +270,30 @@ export function fetchSearchMatches(params?: { search_id?: string; limit?: number
   return get<SearchMatch[]>("/api/search-matches", params);
 }
 
+// --- Word Cloud ---
+
+export interface WordCloudItem {
+  text: string;
+  count: number;
+  type?: string;  // entity type (entities source only)
+}
+
+export function fetchWordCloudEntities(filters?: { time_from?: string; time_to?: string; limit?: number }) {
+  return get<WordCloudItem[]>("/api/word-cloud/entities", filters);
+}
+
+export function fetchWordCloudTags(filters?: { time_from?: string; time_to?: string; limit?: number }) {
+  return get<WordCloudItem[]>("/api/word-cloud/tags", filters);
+}
+
+export function fetchWordCloudSmokeTerms(filters?: { time_from?: string; time_to?: string; limit?: number }) {
+  return get<WordCloudItem[]>("/api/word-cloud/smoke-terms", filters);
+}
+
+export function fetchWordCloudHeadlines(filters?: { time_from?: string; time_to?: string; limit?: number }) {
+  return get<WordCloudItem[]>("/api/word-cloud/headlines", filters);
+}
+
 // --- Liveblog Blocks ---
 
 export interface LiveBlock {

@@ -14,6 +14,7 @@ const ENTITY_TYPES = [
 
 const TIME_PRESETS = [
   { label: "All time", from: "", to: "" },
+  { label: "Today", from: daysAgo(1), to: "" },
   { label: "Last 7d", from: daysAgo(7), to: "" },
   { label: "Last 30d", from: daysAgo(30), to: "" },
   { label: "Last 90d", from: daysAgo(90), to: "" },

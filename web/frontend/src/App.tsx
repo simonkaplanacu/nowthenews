@@ -8,6 +8,7 @@ import GeoView from "./views/GeoView";
 import CompareView from "./views/CompareView";
 import DashboardView from "./views/DashboardView";
 import AlertsView from "./views/AlertsView";
+import WordCloudView from "./views/WordCloudView";
 import { FilterProvider } from "./context/FilterContext";
 import FilterBar from "./components/FilterBar";
 import "./App.css";
@@ -43,6 +44,9 @@ function AppContent() {
             <NavLink to="/search" className={({ isActive }) => isActive ? "tab active" : "tab"}>
               Search
             </NavLink>
+            <NavLink to="/words" className={({ isActive }) => isActive ? "tab active" : "tab"}>
+              Words
+            </NavLink>
             <NavLink to="/alerts" className={({ isActive }) => isActive ? "tab active" : "tab"}>
               Alerts
             </NavLink>
@@ -59,6 +63,7 @@ function AppContent() {
             <Route path="/geo" element={<GeoView />} />
             <Route path="/compare" element={<CompareView />} />
             <Route path="/search" element={<SearchView />} />
+            <Route path="/words" element={<WordCloudView />} />
             <Route path="/alerts" element={<AlertsView />} />
           </Routes>
         </main>

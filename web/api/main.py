@@ -1158,6 +1158,166 @@ def update_enrichment_exception(article_id: str, body: ExceptionUpdate):
 
 
 # ---------------------------------------------------------------------------
+# Word Cloud
+# ---------------------------------------------------------------------------
+
+_STOP_WORDS = {
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
+    "be", "have", "has", "had", "do", "does", "did", "will", "would",
+    "could", "should", "may", "might", "shall", "can", "need", "must",
+    "not", "no", "nor", "so", "too", "very", "just", "about", "above",
+    "after", "again", "all", "also", "am", "any", "because", "before",
+    "between", "both", "each", "few", "further", "get", "got", "he", "she",
+    "her", "here", "him", "his", "how", "i", "if", "into", "it", "its",
+    "let", "me", "more", "most", "my", "new", "now", "off", "old", "once",
+    "one", "only", "other", "our", "out", "over", "own", "per", "put",
+    "said", "same", "say", "says", "set", "she", "some", "still", "such",
+    "take", "than", "that", "their", "them", "then", "there", "these",
+    "they", "this", "those", "through", "under", "until", "up", "us",
+    "use", "used", "using", "want", "way", "we", "well", "what", "when",
+    "where", "which", "while", "who", "whom", "why", "will", "with",
+    "you", "your", "it's", "don't", "he's", "she's", "that's", "what's",
+    "who's", "i'm", "we're", "they're", "you're", "isn't", "aren't",
+    "won't", "can't", "didn't", "doesn't", "hasn't", "haven't", "wasn't",
+    "weren't", "wouldn't", "couldn't", "shouldn't", "how's", "here's",
+    "there's", "where's", "when's", "why's", "let's", "being", "having",
+    "doing", "going", "making", "being", "getting", "coming", "taking",
+    "vs", "v", "de", "el", "en", "la", "le", "les", "un", "une", "des",
+    "et", "est", "dans", "par", "sur",
+    "live", "updates", "latest", "news", "blog",  # guardian-specific noise
+}
+
+
+@app.get("/api/word-cloud/entities")
+def word_cloud_entities(
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
+    limit: int = Query(150),
+):
+    """Top entities sized by article count."""
+    ch = _get_ch()
+    time_clause, params = _time_filter("a", time_from, time_to)
+    params["pv"] = _PROMPT_VERSION
+    params["limit"] = limit
+
+    where = f"e.prompt_version = %(pv)s"
+    if time_clause:
+        where += f" AND {time_clause}"
+
+    rows = ch.query(f"""
+        SELECT lower(ent_name) AS name, ent_type AS type,
+               count(DISTINCT e.article_id) AS count
+        FROM {_DB}.article_enrichment e FINAL
+        ARRAY JOIN e.`entities.name` AS ent_name, e.`entities.type` AS ent_type
+        INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id
+        WHERE {where}
+        GROUP BY name, type
+        HAVING count >= 2
+        ORDER BY count DESC
+        LIMIT %(limit)s
+    """, parameters=params).result_rows
+    return [{"text": r[0], "type": r[1], "count": r[2]} for r in rows]
+
+
+@app.get("/api/word-cloud/tags")
+def word_cloud_tags(
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
+    limit: int = Query(150),
+):
+    """Top Guardian keyword tags sized by article count."""
+    ch = _get_ch()
+    time_clause, params = _time_filter("a", time_from, time_to)
+    params["limit"] = limit
+
+    where = "t.tag_type = 'keyword'"
+    if time_clause:
+        where += f" AND {time_clause}"
+
+    rows = ch.query(f"""
+        SELECT t.tag_title AS text, count(DISTINCT t.article_id) AS count
+        FROM {_DB}.article_tags t
+        INNER JOIN {_DB}.articles a FINAL ON a.article_id = t.article_id
+        WHERE {where}
+        GROUP BY text
+        HAVING count >= 2
+        ORDER BY count DESC
+        LIMIT %(limit)s
+    """, parameters=params).result_rows
+    return [{"text": r[0], "count": r[1]} for r in rows]
+
+
+@app.get("/api/word-cloud/smoke-terms")
+def word_cloud_smoke_terms(
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
+    limit: int = Query(150),
+):
+    """Top smoke/framing terms sized by occurrence count."""
+    ch = _get_ch()
+    time_clause, params = _time_filter("a", time_from, time_to)
+    params["pv"] = _PROMPT_VERSION
+    params["limit"] = limit
+
+    where = f"e.prompt_version = %(pv)s"
+    if time_clause:
+        where += f" AND {time_clause}"
+
+    rows = ch.query(f"""
+        SELECT lower(term) AS text, count() AS count
+        FROM {_DB}.article_enrichment e FINAL
+        ARRAY JOIN e.`smoke_terms.term` AS term
+        INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id
+        WHERE {where}
+        GROUP BY text
+        HAVING count >= 2
+        ORDER BY count DESC
+        LIMIT %(limit)s
+    """, parameters=params).result_rows
+    return [{"text": r[0], "count": r[1]} for r in rows]
+
+
+@app.get("/api/word-cloud/headlines")
+def word_cloud_headlines(
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
+    limit: int = Query(150),
+):
+    """Word frequency from article headlines (stop words removed)."""
+    ch = _get_ch()
+    time_clause, params = _time_filter("a", time_from, time_to)
+    params["limit"] = limit
+
+    where = "1=1"
+    if time_clause:
+        where = time_clause
+
+    rows = ch.query(f"""
+        SELECT word, count() AS count
+        FROM (
+            SELECT arrayJoin(
+                splitByRegexp('[^a-zA-Z0-9'']+', lower(a.title))
+            ) AS word
+            FROM {_DB}.articles a FINAL
+            WHERE {where}
+        )
+        WHERE length(word) >= 3
+        GROUP BY word
+        HAVING count >= 3
+        ORDER BY count DESC
+        LIMIT %(limit)s
+    """, parameters=params).result_rows
+    # Filter stop words in Python (easier to maintain the list)
+    result = [
+        {"text": r[0], "count": r[1]}
+        for r in rows
+        if r[0] not in _STOP_WORDS
+    ]
+    return result[:limit]
+
+
+# ---------------------------------------------------------------------------
 # Liveblog Blocks
 # ---------------------------------------------------------------------------
 
