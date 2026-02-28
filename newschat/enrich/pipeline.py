@@ -122,6 +122,10 @@ def _store_enrichment(
     if result.event_date:
         try:
             event_date = date.fromisoformat(result.event_date)
+            # ClickHouse Date type only supports 1970-01-01 onwards
+            if event_date < date(1970, 1, 1):
+                log.warning("event_date %s before epoch for %s, storing as null", event_date, article_id)
+                event_date = None
         except ValueError:
             log.warning("Invalid event_date '%s' for %s", result.event_date, article_id)
 

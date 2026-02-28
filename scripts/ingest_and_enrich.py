@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Ingest recent Guardian articles and enrich any unenriched backlog.
 
-Designed to run unattended via launchctl every 8 hours.
+Designed to run unattended via launchctl every 5 minutes.
 """
 import json
 import logging
@@ -142,18 +142,21 @@ def _run_saved_search_matching():
 
 
 def main():
-    # --- Ingest last 2 days (ClickHouse dedupes via ReplacingMergeTree) ---
+    # --- Ingest today + yesterday (ClickHouse dedupes via ReplacingMergeTree) ---
+    # Guardian API uses date granularity, so 1-day lookback is the minimum
+    # useful window. 2 days covers the midnight boundary safely.
+    # At 288 runs/day × ~1 page each = ~288 requests, well under 500/day limit.
     log.info("Starting ingestion...")
     try:
         from newschat.ingest.loader import ingest
 
         to_date = date.today()
-        from_date = to_date - timedelta(days=2)
+        from_date = to_date - timedelta(days=1)
         result = ingest(from_date=from_date, to_date=to_date)
         log.info("Ingestion complete: %s", result)
 
         # Check for zero articles
-        if hasattr(result, "articles_new") and result.articles_new == 0:
+        if isinstance(result, dict) and result.get("articles_new") == 0:
             _write_alert(
                 "ingestion_failure", "warning",
                 "Ingestion returned 0 new articles",
@@ -177,11 +180,11 @@ def main():
                 sys.executable,
                 "scripts/enrich_coordinator.py",
                 "--model", "groq:qwen/qwen3-32b",
-                "--batch", "500",
+                "--batch", "50",
                 "--workers", "1",
             ],
             cwd="/Users/simon/GitHub/nowthenews",
-            timeout=7 * 3600,  # 7 hour timeout (leaves 1h buffer before next run)
+            timeout=4 * 60,  # 4 minute timeout (leaves 1min buffer before next run)
             capture_output=False,
         )
         log.info("Enrichment coordinator exited with code %d", proc.returncode)
@@ -192,10 +195,10 @@ def main():
                 json.dumps({"returncode": proc.returncode}),
             )
     except subprocess.TimeoutExpired:
-        log.warning("Enrichment coordinator timed out after 7 hours")
+        log.warning("Enrichment coordinator timed out after 4 minutes")
         _write_alert(
-            "enrichment_crash", "warning",
-            "Enrichment coordinator timed out after 7 hours",
+            "enrichment_crash", "info",
+            "Enrichment coordinator timed out after 4 minutes (will continue next run)",
         )
     except Exception as exc:
         log.exception("Enrichment coordinator failed")
