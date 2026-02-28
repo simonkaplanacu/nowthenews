@@ -86,16 +86,27 @@ def kill_coordinator(pid: int, error_count: int):
         pid, error_count, WINDOW_MINUTES,
     )
     # Write alert to ClickHouse
+    alert_msg = f"Watchdog killed coordinator (PID {pid}) — {error_count} API errors in {WINDOW_MINUTES}min"
     try:
         import json
         from newschat.db import write_alert
         write_alert(
             "api_limit", "critical",
-            f"Watchdog killed coordinator (PID {pid}) — {error_count} API errors in {WINDOW_MINUTES}min",
+            alert_msg,
             json.dumps({"pid": pid, "error_count": error_count, "window_minutes": WINDOW_MINUTES}),
         )
     except Exception as e:
         log.warning("Failed to write alert to DB: %s", e)
+
+    # Send email
+    try:
+        from newschat.email import send_alert_email
+        send_alert_email(
+            "CRITICAL: API limit — coordinator killed",
+            f"<h3>Enrichment Watchdog</h3><p>{alert_msg}</p>",
+        )
+    except Exception as e:
+        log.warning("Failed to send alert email: %s", e)
 
     try:
         os.kill(pid, signal.SIGTERM)

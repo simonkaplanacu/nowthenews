@@ -17,13 +17,25 @@ log = logging.getLogger(__name__)
 
 
 def _write_alert(alert_type: str, severity: str, message: str, context: str = ""):
-    """Write an alert to ClickHouse (best-effort, never raises)."""
+    """Write an alert to ClickHouse and send email (best-effort, never raises)."""
     try:
         from newschat.db import write_alert
         write_alert(alert_type, severity, message, context)
         log.info("Alert written: [%s] %s", alert_type, message)
     except Exception:
         log.exception("Failed to write alert")
+
+    # Send email for warning/critical system alerts
+    if severity in ("warning", "critical"):
+        try:
+            from newschat.email import send_alert_email
+            send_alert_email(
+                f"{severity.upper()}: {alert_type}",
+                f"<h3>{alert_type}</h3><p>{message}</p>"
+                f"{'<pre>' + context + '</pre>' if context else ''}",
+            )
+        except Exception:
+            log.exception("Failed to send alert email")
 
 
 def _check_stale_db():
@@ -102,6 +114,27 @@ def _run_saved_search_matching():
                     json.dumps({"search_id": search_id, "label": label, "match_count": len(new_matches)}),
                 )
                 log.info("Search '%s' matched %d new articles", label, len(new_matches))
+
+                # Email notification for search matches
+                try:
+                    # Fetch article titles for the email
+                    title_result = client.query(
+                        f"SELECT title, url FROM {_DB}.articles FINAL "
+                        f"WHERE article_id IN %(aids)s",
+                        parameters={"aids": new_matches},
+                    )
+                    articles_html = "".join(
+                        f'<li><a href="{r[1]}">{r[0]}</a></li>'
+                        for r in title_result.result_rows
+                    )
+                    from newschat.email import send_alert_email
+                    send_alert_email(
+                        f"Saved search: {label} ({len(new_matches)} new)",
+                        f"<h3>Saved search &ldquo;{label}&rdquo; matched {len(new_matches)} new article(s)</h3>"
+                        f"<ul>{articles_html}</ul>",
+                    )
+                except Exception:
+                    log.exception("Failed to send search match email")
         finally:
             client.close()
     except Exception:

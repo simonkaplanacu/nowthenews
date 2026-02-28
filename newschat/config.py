@@ -26,6 +26,9 @@ _cfg = _load_json_config()
 GUARDIAN_API_KEY = os.environ.get("GUARDIAN_API_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+ALERT_EMAIL_FROM = os.environ.get("ALERT_EMAIL_FROM", "alerts@nowthenews.local")
+ALERT_EMAIL_TO = os.environ.get("ALERT_EMAIL_TO", "")
 
 # --- Guardian API ---
 _guardian = _cfg.get("guardian", {})
