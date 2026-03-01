@@ -5,6 +5,8 @@ import {
   fetchEntityTimeline,
   fetchEntityArticles,
   fetchCooccurrenceArticles,
+  summarizeArticle,
+  summarizeArticles,
   type TimelineData,
   type Article,
 } from "../api/client";
@@ -25,6 +27,31 @@ export default function CompareView() {
   const [articlesB, setArticlesB] = useState<Article[]>([]);
   const [articlesBoth, setArticlesBoth] = useState<Article[]>([]);
   const [articlesLoading, setArticlesLoading] = useState(false);
+  const [articleSummaries, setArticleSummaries] = useState<Record<string, string>>({});
+  const [summarizingId, setSummarizingId] = useState<string | null>(null);
+  const [syntheses, setSyntheses] = useState<Record<string, string>>({});
+  const [synthesizingKey, setSynthesizingKey] = useState<string | null>(null);
+
+  const handleSummarizeOne = (articleId: string) => {
+    setSummarizingId(articleId);
+    summarizeArticle(articleId)
+      .then((result) => {
+        setArticleSummaries((prev) => ({ ...prev, [articleId]: result.error ? `Error: ${result.error}` : result.summary }));
+      })
+      .catch((err) => setArticleSummaries((prev) => ({ ...prev, [articleId]: `Error: ${err.message}` })))
+      .finally(() => setSummarizingId(null));
+  };
+
+  const handleSummarizeColumn = (key: string, arts: Article[], label: string) => {
+    if (arts.length === 0) return;
+    setSynthesizingKey(key);
+    summarizeArticles(arts.map((a) => a.article_id), label)
+      .then((result) => {
+        setSyntheses((prev) => ({ ...prev, [key]: result.error ? `Error: ${result.error}` : result.synthesis }));
+      })
+      .catch((err) => setSyntheses((prev) => ({ ...prev, [key]: `Error: ${err.message}` })))
+      .finally(() => setSynthesizingKey(null));
+  };
 
   const handleCompare = useCallback(async () => {
     const a = entityA.trim().toLowerCase();
@@ -107,54 +134,56 @@ export default function CompareView() {
       <svg ref={svgRef} className="compare-svg" />
       {activeA && activeB && !articlesLoading && (
         <div className="compare-articles">
-          <div className="compare-column">
-            <h3 style={{ color: COLOR_A }}>Only {activeA} ({articlesA.length})</h3>
-            <div className="compare-list">
-              {articlesA.slice(0, 20).map((a) => (
-                <div key={a.article_id} className="article-card">
-                  <a href={a.url} target="_blank" rel="noopener noreferrer" className="article-title">
-                    {a.headline || a.title}
-                  </a>
-                  <div className="article-meta">
-                    <span>{a.section}</span>
-                    <span>{a.published_at?.slice(0, 10)}</span>
-                  </div>
+          {([
+            { key: "a", arts: articlesA, label: `Only ${activeA}`, color: COLOR_A },
+            { key: "both", arts: articlesBoth, label: "Both", color: "#fff", className: "compare-both" },
+            { key: "b", arts: articlesB, label: `Only ${activeB}`, color: COLOR_B },
+          ] as const).map(({ key, arts, label, color, className }) => (
+            <div key={key} className={`compare-column ${className || ""}`}>
+              <h3 style={{ color }}>{label} ({arts.length})</h3>
+              {arts.length > 0 && (
+                <button
+                  className="summarize-btn"
+                  style={{ marginBottom: 8, width: "100%" }}
+                  onClick={() => handleSummarizeColumn(key, arts, `${label}: ${activeA} vs ${activeB}`)}
+                  disabled={synthesizingKey === key}
+                >
+                  {synthesizingKey === key ? "Summarizing..." : "Summarize"}
+                </button>
+              )}
+              {syntheses[key] && (
+                <div className="synthesis-box" style={{ marginBottom: 8 }}>
+                  <div className="synthesis-label">Synthesis</div>
+                  <div className="synthesis-text">{syntheses[key]}</div>
                 </div>
-              ))}
-            </div>
-          </div>
-          <div className="compare-column compare-both">
-            <h3 style={{ color: "#fff" }}>Both ({articlesBoth.length})</h3>
-            <div className="compare-list">
-              {articlesBoth.slice(0, 20).map((a) => (
-                <div key={a.article_id} className="article-card">
-                  <a href={a.url} target="_blank" rel="noopener noreferrer" className="article-title">
-                    {a.headline || a.title}
-                  </a>
-                  <div className="article-meta">
-                    <span>{a.section}</span>
-                    <span>{a.published_at?.slice(0, 10)}</span>
+              )}
+              <div className="compare-list">
+                {arts.slice(0, 20).map((a) => (
+                  <div key={a.article_id} className="article-card">
+                    <a href={a.url} target="_blank" rel="noopener noreferrer" className="article-title">
+                      {a.headline || a.title}
+                    </a>
+                    <div className="article-meta">
+                      <span>{a.section}</span>
+                      <span>{a.published_at?.slice(0, 10)}</span>
+                      {!articleSummaries[a.article_id] && (
+                        <button
+                          className="summarize-one-btn"
+                          onClick={() => handleSummarizeOne(a.article_id)}
+                          disabled={summarizingId === a.article_id}
+                        >
+                          {summarizingId === a.article_id ? "..." : "Summarize"}
+                        </button>
+                      )}
+                    </div>
+                    {articleSummaries[a.article_id] && (
+                      <div className="article-ai-summary">{articleSummaries[a.article_id]}</div>
+                    )}
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-          <div className="compare-column">
-            <h3 style={{ color: COLOR_B }}>Only {activeB} ({articlesB.length})</h3>
-            <div className="compare-list">
-              {articlesB.slice(0, 20).map((a) => (
-                <div key={a.article_id} className="article-card">
-                  <a href={a.url} target="_blank" rel="noopener noreferrer" className="article-title">
-                    {a.headline || a.title}
-                  </a>
-                  <div className="article-meta">
-                    <span>{a.section}</span>
-                    <span>{a.published_at?.slice(0, 10)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          ))}
         </div>
       )}
     </div>

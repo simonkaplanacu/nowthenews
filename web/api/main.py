@@ -626,43 +626,34 @@ def text_search(
     limit: int = Query(50),
     offset: int = Query(0),
 ):
-    """Full-text substring search across article body, title, and headline.
+    """Full-text search across article body, title, and headline.
 
-    Each word is matched independently (AND logic) — all words must appear
-    somewhere in the article's title, headline, or body text.
+    Supports structured syntax: bare text (AND), | or , for OR,
+    parenthesized groups, and topic:X filters.
     """
     ch = _get_ch()
-    # Split on commas first, then split each part on whitespace
-    words: list[str] = []
-    for part in q.split(","):
-        words.extend(w for w in part.strip().split() if w)
-    if not words:
+    parsed = _parse_search(q)
+    if not parsed["text_clauses"] and not parsed["topics"]:
         return []
 
     params: dict = {"limit": limit, "offset": offset}
-    where_parts: list[str] = []
-
-    for i, word in enumerate(words):
-        key = f"q{i}"
-        params[key] = word
-        where_parts.append(
-            f"(positionCaseInsensitive(a.body_text, %({key})s) > 0"
-            f" OR positionCaseInsensitive(a.title, %({key})s) > 0"
-            f" OR positionCaseInsensitive(a.headline, %({key})s) > 0)"
-        )
+    where_parts, search_params = _search_sql_from_parsed(parsed, prefix="q")
+    params.update(search_params)
 
     time_clause, time_params = _time_filter("a", time_from, time_to)
     params.update(time_params)
     if time_clause:
         where_parts.append(time_clause)
 
-    where = " AND ".join(where_parts)
+    where = " AND ".join(where_parts) if where_parts else "1=1"
 
     query = f"""
         SELECT
             a.article_id, a.title, a.headline, a.standfirst,
-            a.source, a.section_name, a.published_at, a.url, a.word_count
+            a.source, a.section_name, a.published_at, a.url, a.word_count,
+            e.summary
         FROM {_DB}.articles a FINAL
+        LEFT JOIN {_DB}.article_enrichment e FINAL ON e.article_id = a.article_id
         WHERE {where}
         ORDER BY a.published_at DESC
         LIMIT %(limit)s OFFSET %(offset)s
@@ -673,7 +664,7 @@ def text_search(
             "article_id": r[0], "title": r[1], "headline": r[2],
             "standfirst": r[3], "source": r[4], "section": r[5],
             "published_at": r[6].isoformat() if r[6] else None, "url": r[7],
-            "word_count": r[8],
+            "word_count": r[8], "summary": r[9] or None,
         }
         for r in rows
     ]
