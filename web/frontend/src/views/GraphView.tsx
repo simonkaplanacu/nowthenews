@@ -88,12 +88,19 @@ export default function GraphView() {
     setLoading(true);
     setNoResults(false);
     try {
-      // Fetch ego graph for this entity from the backend
-      const data = await fetchEntityEgo(q, {
+      // Split by commas if present, otherwise treat spaces as separators
+      // for single-word entities (e.g. "Trump Iran Israel")
+      // but keep multi-word names intact when commas are used (e.g. "Donald Trump, Iran")
+      const parts = q.includes(",")
+        ? q.split(",").map((s) => s.trim()).filter(Boolean)
+        : q.split(/\s+/).filter(Boolean);
+      const searchName = parts.join(",");
+
+      const data = await fetchEntityEgo(searchName, {
         time_from: filters.timeFrom || undefined,
         time_to: filters.timeTo || undefined,
         entity_type: filters.entityType || undefined,
-        limit: 50,
+        limit: parts.length > 1 ? 30 * parts.length : 50,
       });
       if (data.nodes.length === 0) {
         setNoResults(true);
@@ -133,10 +140,20 @@ export default function GraphView() {
           time_from: filters.timeFrom || undefined,
           time_to: filters.timeTo || undefined,
         };
-        // In ego mode, show only articles where both entities co-occur
-        if (searchLabel && node.name.toLowerCase() !== searchLabel.toLowerCase()) {
-          const articles = await fetchCooccurrenceArticles(searchLabel, node.name, timeFilters);
-          setPanel({ title: `${searchLabel} + ${node.name} (${articles.length} articles)`, articles });
+        // In ego mode, show co-occurrence with searched entity
+        if (searchLabel) {
+          // Parse searchLabel same way as handleSubmit
+          const parts = searchLabel.includes(",")
+            ? searchLabel.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+            : searchLabel.split(/\s+/).map((s) => s.toLowerCase()).filter(Boolean);
+          const isSearchedEntity = parts.includes(node.name.toLowerCase());
+          if (!isSearchedEntity && parts.length === 1) {
+            const articles = await fetchCooccurrenceArticles(parts[0], node.name, timeFilters);
+            setPanel({ title: `${parts[0]} + ${node.name} (${articles.length} articles)`, articles });
+          } else {
+            const articles = await fetchEntityArticles(node.name, timeFilters);
+            setPanel({ title: `${node.name} (${articles.length} articles)`, articles });
+          }
         } else {
           const articles = await fetchEntityArticles(node.name, timeFilters);
           setPanel({ title: `${node.name} (${articles.length} articles)`, articles });
@@ -191,7 +208,7 @@ export default function GraphView() {
       <div className="graph-toolbar">
         <input
           type="text"
-          placeholder='Search entity: e.g. "Pocock", "climate", "NHS"'
+          placeholder='e.g. "Trump Iran Israel" or "Donald Trump, Iran, Israel"'
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSubmit()}

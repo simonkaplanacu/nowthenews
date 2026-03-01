@@ -178,8 +178,17 @@ export default function WordCloudView() {
         .then(setArticles)
         .catch(console.error)
         .finally(() => setArticlesLoading(false));
+    } else if (source === "topics") {
+      // Use topic: syntax so the search hits article_topics table
+      // Convert display name back to DB code: "International Relations" → "international_relations"
+      const topicCode = word.toLowerCase().replace(/\s+/g, "_");
+      const topicQuery = activeSearch ? `${activeSearch} topic:${topicCode}` : `topic:${topicCode}`;
+      fetchTextSearch(topicQuery, filters)
+        .then(setArticles)
+        .catch(console.error)
+        .finally(() => setArticlesLoading(false));
     } else {
-      // Combine active search + clicked word for text search (space = AND)
+      // tags, smoke, headlines — combine as text AND
       const combined = activeSearch ? `${activeSearch} ${word}` : word;
       fetchTextSearch(combined, filters)
         .then(setArticles)

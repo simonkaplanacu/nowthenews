@@ -315,16 +315,31 @@ def get_entity_ego(
     entity_type: str | None = Query(None),
     limit: int = Query(50),
 ):
-    """Return ego graph: a named entity + all co-occurring entities + edges."""
+    """Return ego graph: named entities + all co-occurring entities + edges.
+
+    entity_name can be comma-separated for multi-entity graphs, e.g.
+    "trump,iran,israel".
+    """
     ch = _get_ch()
     time_clause, params = _time_filter("a", time_from, time_to)
     params["pv"] = _PROMPT_VERSION
-    params["ename"] = entity_name.lower()
     params["limit"] = limit
+
+    # Support comma-separated entity names
+    names = [n.strip().lower() for n in entity_name.split(",") if n.strip()]
+    if not names:
+        return {"nodes": [], "edges": []}
+
+    if len(names) == 1:
+        params["ename"] = names[0]
+        entity_match = "has(arrayMap(x -> lower(x), e.`entities.name`), %(ename)s)"
+    else:
+        params["enames"] = names
+        entity_match = "hasAny(arrayMap(x -> lower(x), e.`entities.name`), %(enames)s)"
 
     where_parts = [
         "e.prompt_version = %(pv)s",
-        "has(arrayMap(x -> lower(x), e.`entities.name`), %(ename)s)",
+        entity_match,
     ]
     if time_clause:
         where_parts.append(time_clause)
@@ -1187,6 +1202,21 @@ _STOP_WORDS = {
     "vs", "v", "de", "el", "en", "la", "le", "les", "un", "une", "des",
     "et", "est", "dans", "par", "sur",
     "live", "updates", "latest", "news", "blog",  # guardian-specific noise
+    # numbers & short filler
+    "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "000", "day", "days", "year", "years", "week", "month", "time", "times",
+    # common headline verbs / adjectives that aren't informative
+    "amid", "end", "like", "back", "first", "last", "long", "big", "top",
+    "high", "full", "left", "right", "best", "part", "much", "many", "real",
+    "find", "finds", "found", "show", "shows", "face", "make", "made",
+    "down", "tell", "told", "ask", "try", "call", "move", "run", "turn",
+    "help", "keep", "come", "came", "look", "give", "gave", "goes", "went",
+    "know", "knew", "think", "thought", "saw", "took", "start", "don",
+    "people", "world", "happened", "against", "inside",
+    # guardian section / format words
+    "review", "letters", "obituary", "crossword", "briefing", "editorial",
+    "podcast", "quiz", "newsletter", "recap", "roundup",
+    "morning", "evening", "weekly", "daily",
 }
 
 
@@ -1213,7 +1243,7 @@ def _parse_search(q: str) -> dict:
     # 1. Extract topic: filters
     for m in re.finditer(r"topic:(\S+)", remaining):
         raw = m.group(1).strip("(),")
-        topics.append(raw.replace("_", " ").lower())
+        topics.append(raw.lower())
     remaining = re.sub(r"topic:\S+", "", remaining).strip()
 
     # 2. Extract parenthesized OR groups: (A | B, C)
@@ -1440,6 +1470,8 @@ def word_cloud_headlines(
         params.update(time_params)
         where = time_clause if time_clause else "1=1"
 
+    # Fetch extra rows from CH so we still have enough after stop-word filtering
+    params["ch_limit"] = limit * 5
     rows = ch.query(f"""
         SELECT word, count() AS count
         FROM (
@@ -1453,7 +1485,7 @@ def word_cloud_headlines(
         GROUP BY word
         HAVING count >= 2
         ORDER BY count DESC
-        LIMIT %(limit)s
+        LIMIT %(ch_limit)s
     """, parameters=params).result_rows
     # Filter stop words in Python (easier to maintain the list)
     result = [

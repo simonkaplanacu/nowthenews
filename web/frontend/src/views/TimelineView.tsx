@@ -61,9 +61,13 @@ export default function TimelineView() {
   }, [loadData, entities]);
 
   const addEntity = useCallback(() => {
-    const val = inputVal.trim().toLowerCase();
-    if (val && !entities.includes(val)) {
-      setEntities((prev) => [...prev, val]);
+    // Support comma-separated or space-separated entity names
+    const parts = inputVal.includes(",")
+      ? inputVal.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+      : [inputVal.trim().toLowerCase()].filter(Boolean);
+    const newEntities = parts.filter((v) => v && !entities.includes(v));
+    if (newEntities.length > 0) {
+      setEntities((prev) => [...prev, ...newEntities]);
     }
     setInputVal("");
   }, [inputVal, entities]);
@@ -109,7 +113,7 @@ export default function TimelineView() {
       <div className="timeline-controls">
         <input
           type="text"
-          placeholder='Add entity: e.g. "trump", "nhs"'
+          placeholder='e.g. "trump, iran, israel" or one at a time'
           value={inputVal}
           onChange={(e) => setInputVal(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && addEntity()}
@@ -252,8 +256,11 @@ function renderTimeline(
         d3.select(this).attr("r", 6);
         const i = series.values.indexOf(d);
         tip.style("display", "block")
-          .html(`<strong>${series.entity}</strong><br/>${d} articles<br/>${data.timestamps[i]}`)
-          .style("left", `${event.offsetX + 12}px`)
+          .html(`<strong>${series.entity}</strong><br/>${d} articles<br/>${data.timestamps[i]}`);
+        // Flip tooltip to left side when near the right edge
+        const tipWidth = 160;
+        const nearRight = event.offsetX + tipWidth + 20 > width;
+        tip.style("left", nearRight ? `${event.offsetX - tipWidth - 12}px` : `${event.offsetX + 12}px`)
           .style("top", `${event.offsetY - 10}px`);
       })
       .on("mouseout", function () {
