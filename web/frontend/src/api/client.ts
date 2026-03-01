@@ -296,6 +296,53 @@ export function fetchWordCloudHeadlines(filters?: WordCloudFilters) {
   return get<WordCloudItem[]>("/api/word-cloud/headlines", filters);
 }
 
+export function fetchWordCloudTopics(filters?: WordCloudFilters) {
+  return get<WordCloudItem[]>("/api/word-cloud/topics", filters);
+}
+
+// --- Article Summarization ---
+
+export interface ArticleSummaryResult {
+  summary: string;
+  article_id: string;
+  title: string;
+  url: string;
+  error?: string;
+}
+
+export interface SynthesisArticle {
+  article_id: string;
+  title: string;
+  url: string;
+}
+
+export interface SynthesisResult {
+  synthesis: string;
+  article_count: number;
+  articles: SynthesisArticle[];
+  error?: string;
+}
+
+export async function summarizeArticle(articleId: string): Promise<ArticleSummaryResult> {
+  const resp = await fetch("/api/summarize-article", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ article_id: articleId }),
+  });
+  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  return resp.json();
+}
+
+export async function summarizeArticles(articleIds: string[], query?: string): Promise<SynthesisResult> {
+  const resp = await fetch("/api/summarize-articles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ article_ids: articleIds, query: query || null }),
+  });
+  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  return resp.json();
+}
+
 // --- Liveblog Blocks ---
 
 export interface LiveBlock {

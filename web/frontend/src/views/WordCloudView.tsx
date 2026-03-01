@@ -6,18 +6,22 @@ import {
   fetchWordCloudTags,
   fetchWordCloudSmokeTerms,
   fetchWordCloudHeadlines,
+  fetchWordCloudTopics,
   fetchTextSearch,
   fetchEntityArticles,
+  summarizeArticle,
+  summarizeArticles,
 } from "../api/client";
 import cloud from "d3-cloud";
 
-type Source = "entities" | "tags" | "smoke" | "headlines";
+type Source = "entities" | "tags" | "smoke" | "headlines" | "topics";
 
 const SOURCE_LABELS: Record<Source, string> = {
   entities: "Entities",
   tags: "Keywords",
   smoke: "Smoke Terms",
   headlines: "Headlines",
+  topics: "Hot Topics",
 };
 
 const ENTITY_TYPE_COLORS: Record<string, string> = {
@@ -43,6 +47,7 @@ function wordColor(item: WordCloudItem, source: Source): string {
   if (source === "tags") return "#81c784";
   if (source === "smoke") return "#ef9a9a";
   if (source === "headlines") return "#ffb74d";
+  if (source === "topics") return "#ce93d8";
   return "#4fc3f7";
 }
 
@@ -68,6 +73,10 @@ export default function WordCloudView() {
   const [articlesLoading, setArticlesLoading] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [activeSearch, setActiveSearch] = useState("");
+  const [synthesis, setSynthesis] = useState<string | null>(null);
+  const [synthesisLoading, setSynthesisLoading] = useState(false);
+  const [articleSummaries, setArticleSummaries] = useState<Record<string, string>>({});
+  const [summarizingId, setSummarizingId] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -75,6 +84,7 @@ export default function WordCloudView() {
     setLoading(true);
     setSelected(null);
     setArticles([]);
+    setSynthesis(null);
     const filters = {
       q: activeSearch || undefined,
       time_from: timeFrom || undefined,
@@ -86,6 +96,7 @@ export default function WordCloudView() {
       tags: fetchWordCloudTags,
       smoke: fetchWordCloudSmokeTerms,
       headlines: fetchWordCloudHeadlines,
+      topics: fetchWordCloudTopics,
     }[source];
     fetcher(filters)
       .then(setWords)
@@ -155,6 +166,8 @@ export default function WordCloudView() {
   const handleWordClick = (word: string) => {
     setSelected(word);
     setArticlesLoading(true);
+    setSynthesis(null);
+    setArticleSummaries({});
     const filters = {
       time_from: timeFrom || undefined,
       time_to: timeTo || undefined,
@@ -167,7 +180,7 @@ export default function WordCloudView() {
         .finally(() => setArticlesLoading(false));
     } else {
       // Combine active search + clicked word for text search
-      const combined = activeSearch ? `${activeSearch} ${word}` : word;
+      const combined = activeSearch ? `${activeSearch}, ${word}` : word;
       fetchTextSearch(combined, filters)
         .then(setArticles)
         .catch(console.error)
@@ -184,13 +197,45 @@ export default function WordCloudView() {
     setActiveSearch("");
   };
 
+  const handleSummarizeAll = () => {
+    if (articles.length === 0) return;
+    setSynthesisLoading(true);
+    setSynthesis(null);
+    const ids = articles.map((a) => a.article_id);
+    const query = activeSearch ? `${activeSearch} — ${selected}` : selected || undefined;
+    summarizeArticles(ids, query)
+      .then((result) => {
+        if (result.error) {
+          setSynthesis(`Error: ${result.error}`);
+        } else {
+          setSynthesis(result.synthesis);
+        }
+      })
+      .catch((err) => setSynthesis(`Error: ${err.message}`))
+      .finally(() => setSynthesisLoading(false));
+  };
+
+  const handleSummarizeOne = (articleId: string) => {
+    setSummarizingId(articleId);
+    summarizeArticle(articleId)
+      .then((result) => {
+        if (result.error) {
+          setArticleSummaries((prev) => ({ ...prev, [articleId]: `Error: ${result.error}` }));
+        } else {
+          setArticleSummaries((prev) => ({ ...prev, [articleId]: result.summary }));
+        }
+      })
+      .catch((err) => setArticleSummaries((prev) => ({ ...prev, [articleId]: `Error: ${err.message}` })))
+      .finally(() => setSummarizingId(null));
+  };
+
   return (
     <div className="wordcloud-view">
       <div className="wordcloud-tabs">
         <div className="wordcloud-search-group">
           <input
             className="wordcloud-search-input"
-            placeholder="Search articles, then cloud their words..."
+            placeholder="Search phrases, comma-separated..."
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
@@ -267,7 +312,7 @@ export default function WordCloudView() {
           <div className="wordcloud-panel">
             <div className="panel-header">
               <h2>{selected}</h2>
-              <button className="close-btn" onClick={() => { setSelected(null); setArticles([]); }}>
+              <button className="close-btn" onClick={() => { setSelected(null); setArticles([]); setSynthesis(null); setArticleSummaries({}); }}>
                 x
               </button>
             </div>
@@ -275,6 +320,24 @@ export default function WordCloudView() {
               {articlesLoading && <div className="empty">Loading articles...</div>}
               {!articlesLoading && articles.length === 0 && (
                 <div className="empty">No articles found</div>
+              )}
+              {!articlesLoading && articles.length > 0 && (
+                <div className="summarize-all-bar">
+                  <span className="article-count-label">{articles.length} articles</span>
+                  <button
+                    className="summarize-btn"
+                    onClick={handleSummarizeAll}
+                    disabled={synthesisLoading}
+                  >
+                    {synthesisLoading ? "Summarizing..." : "Summarize all"}
+                  </button>
+                </div>
+              )}
+              {synthesis && (
+                <div className="synthesis-box">
+                  <div className="synthesis-label">Synthesis</div>
+                  <div className="synthesis-text">{synthesis}</div>
+                </div>
               )}
               {articles.map((a) => (
                 <div key={a.article_id} className="article-card">
@@ -291,9 +354,21 @@ export default function WordCloudView() {
                     <span>
                       {a.published_at && new Date(a.published_at).toLocaleDateString()}
                     </span>
+                    {!articleSummaries[a.article_id] && (
+                      <button
+                        className="summarize-one-btn"
+                        onClick={() => handleSummarizeOne(a.article_id)}
+                        disabled={summarizingId === a.article_id}
+                      >
+                        {summarizingId === a.article_id ? "..." : "Summarize"}
+                      </button>
+                    )}
                   </div>
-                  {a.summary && <div className="summary">{a.summary}</div>}
-                  {a.standfirst && !a.summary && (
+                  {articleSummaries[a.article_id] && (
+                    <div className="article-ai-summary">{articleSummaries[a.article_id]}</div>
+                  )}
+                  {!articleSummaries[a.article_id] && a.summary && <div className="summary">{a.summary}</div>}
+                  {!articleSummaries[a.article_id] && a.standfirst && !a.summary && (
                     <div className="standfirst">{a.standfirst}</div>
                   )}
                 </div>

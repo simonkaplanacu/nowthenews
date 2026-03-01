@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -413,15 +414,20 @@ def get_entity_articles(
         where_parts.append(time_clause)
 
     # Additional text search filter (e.g. from word cloud active search)
+    # Comma-separated phrases are ORed (match any phrase)
     if q:
-        for i, word in enumerate(q.strip().split()):
+        phrases = [p.strip() for p in q.split(",") if p.strip()]
+        phrase_clauses: list[str] = []
+        for i, phrase in enumerate(phrases):
             key = f"tq{i}"
-            params[key] = word
-            where_parts.append(
+            params[key] = phrase
+            phrase_clauses.append(
                 f"(positionCaseInsensitive(a.body_text, %({key})s) > 0"
                 f" OR positionCaseInsensitive(a.title, %({key})s) > 0"
                 f" OR positionCaseInsensitive(a.headline, %({key})s) > 0)"
             )
+        if phrase_clauses:
+            where_parts.append(f"({' OR '.join(phrase_clauses)})")
 
     where = " AND ".join(where_parts)
     params["limit"] = limit
@@ -1202,23 +1208,33 @@ _STOP_WORDS = {
 
 
 def _search_subquery(q: str, time_from: str | None, time_to: str | None) -> tuple[str, dict] | None:
-    """Build a subquery SQL + params for article IDs matching text search. Returns None if no query."""
+    """Build a subquery SQL + params for article IDs matching text search.
+
+    Comma-separated phrases are ORed (match any phrase).
+    Each phrase is matched as a whole string against body, title, headline.
+    Returns None if no query.
+    """
     if not q:
         return None
-    words = [w for part in q.split(",") for w in part.strip().split() if w]
-    if not words:
+    phrases = [p.strip() for p in q.split(",") if p.strip()]
+    if not phrases:
         return None
 
     params: dict = {}
-    where_parts: list[str] = []
-    for i, word in enumerate(words):
+    phrase_clauses: list[str] = []
+    for i, phrase in enumerate(phrases):
         key = f"sq{i}"
-        params[key] = word
-        where_parts.append(
+        params[key] = phrase
+        phrase_clauses.append(
             f"(positionCaseInsensitive(a.body_text, %({key})s) > 0"
             f" OR positionCaseInsensitive(a.title, %({key})s) > 0"
             f" OR positionCaseInsensitive(a.headline, %({key})s) > 0)"
         )
+
+    # OR the phrases together (match any)
+    search_clause = " OR ".join(phrase_clauses)
+
+    where_parts: list[str] = [f"({search_clause})"]
     time_clause, time_params = _time_filter("a", time_from, time_to)
     params.update(time_params)
     if time_clause:
@@ -1393,6 +1409,182 @@ def word_cloud_headlines(
         if r[0] not in _STOP_WORDS
     ]
     return result[:limit]
+
+
+@app.get("/api/word-cloud/topics")
+def word_cloud_topics(
+    q: str | None = Query(None),
+    time_from: str | None = Query(None),
+    time_to: str | None = Query(None),
+    limit: int = Query(150),
+):
+    """Hot topics sized by article count."""
+    ch = _get_ch()
+    params: dict = {"limit": limit}
+
+    sq = _search_subquery(q or "", time_from, time_to)
+
+    where = "1=1"
+    articles_join = ""
+    if sq is not None:
+        sub_sql, sub_params = sq
+        params.update(sub_params)
+        where = f"t.article_id IN ({sub_sql})"
+    else:
+        time_clause, time_params = _time_filter("a", time_from, time_to)
+        params.update(time_params)
+        if time_clause:
+            where = time_clause
+            articles_join = f"INNER JOIN {_DB}.articles a FINAL ON a.article_id = t.article_id"
+
+    rows = ch.query(f"""
+        SELECT t.topic AS text, count(DISTINCT t.article_id) AS count
+        FROM {_DB}.article_topics t
+        {articles_join}
+        WHERE {where}
+        GROUP BY text
+        HAVING count >= 2
+        ORDER BY count DESC
+        LIMIT %(limit)s
+    """, parameters=params).result_rows
+    # Make topic names human-readable (replace underscores, title case)
+    return [{"text": r[0].replace("_", " ").title(), "count": r[1]} for r in rows]
+
+
+def _strip_think(text: str) -> str:
+    """Strip Qwen's <think>...</think> reasoning block from output."""
+    return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+
+
+# ---------------------------------------------------------------------------
+# Article Summarization (via Groq)
+# ---------------------------------------------------------------------------
+
+
+class SummarizeRequest(BaseModel):
+    article_id: str
+
+
+class SummarizeBatchRequest(BaseModel):
+    article_ids: list[str]
+    query: str | None = None
+
+
+@app.post("/api/summarize-article")
+async def summarize_article(req: SummarizeRequest):
+    """Summarize a single article using Groq."""
+    if not GROQ_API_KEY:
+        return {"error": "GROQ_API_KEY not configured"}
+
+    ch = _get_ch()
+    rows = ch.query(f"""
+        SELECT a.title, a.headline, a.standfirst, a.body_text, a.url
+        FROM {_DB}.articles a FINAL
+        WHERE a.article_id = %(aid)s
+        LIMIT 1
+    """, parameters={"aid": req.article_id}).result_rows
+    if not rows:
+        return {"error": "Article not found"}
+
+    title, headline, standfirst, body_text, url = rows[0]
+    # Truncate body to ~6000 chars to stay within context limits
+    body_snippet = (body_text or "")[:6000]
+
+    prompt = f"""Summarize the following news article in 3-5 clear paragraphs. Focus on the key facts, who is involved, what happened, and why it matters.
+
+Title: {title}
+Headline: {headline}
+Standfirst: {standfirst}
+
+Article text:
+{body_snippet}"""
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            json={
+                "model": "qwen/qwen3-32b",
+                "messages": [
+                    {"role": "system", "content": "You are a concise news summarizer. Write clear, factual summaries."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.3,
+                "max_tokens": 1000,
+            },
+        )
+        if resp.status_code != 200:
+            return {"error": f"Groq API error: {resp.status_code}"}
+        data = resp.json()
+        summary = _strip_think(data["choices"][0]["message"]["content"])
+        return {"summary": summary, "article_id": req.article_id, "title": title, "url": url}
+
+
+@app.post("/api/summarize-articles")
+async def summarize_articles(req: SummarizeBatchRequest):
+    """Synthesize a thematic summary across multiple articles using Groq."""
+    if not GROQ_API_KEY:
+        return {"error": "GROQ_API_KEY not configured"}
+
+    ch = _get_ch()
+    # Fetch article details — limit to 30 for context budget
+    aids = req.article_ids[:30]
+    rows = ch.query(f"""
+        SELECT a.article_id, a.title, a.url, a.standfirst,
+               e.summary
+        FROM {_DB}.articles a FINAL
+        LEFT JOIN {_DB}.article_enrichment e FINAL ON e.article_id = a.article_id
+        WHERE a.article_id IN %(aids)s
+        ORDER BY a.published_at DESC
+    """, parameters={"aids": aids}).result_rows
+
+    if not rows:
+        return {"error": "No articles found"}
+
+    # Build article list for the prompt
+    article_lines = []
+    source_articles = []
+    for r in rows:
+        aid, title, url, standfirst, summary = r
+        blurb = summary or standfirst or ""
+        article_lines.append(f"- [{title}]({url}): {blurb[:300]}")
+        source_articles.append({"article_id": aid, "title": title, "url": url})
+
+    article_text = "\n".join(article_lines)
+    context = f' about "{req.query}"' if req.query else ""
+
+    prompt = f"""Below are {len(rows)} news articles{context}. Write a thematic synthesis in 3-6 paragraphs that:
+1. Identifies the main themes and narratives across these articles
+2. Highlights key facts, people, and developments
+3. Notes any conflicting perspectives or evolving situations
+4. References specific articles by their title when citing facts
+
+Articles:
+{article_text}"""
+
+    async with httpx.AsyncClient(timeout=45) as client:
+        resp = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            json={
+                "model": "qwen/qwen3-32b",
+                "messages": [
+                    {"role": "system", "content": "You are an expert news analyst. Write clear, well-structured thematic summaries that synthesize multiple articles into a coherent narrative."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.3,
+                "max_tokens": 2000,
+            },
+        )
+        if resp.status_code != 200:
+            return {"error": f"Groq API error: {resp.status_code}"}
+        data = resp.json()
+        synthesis = _strip_think(data["choices"][0]["message"]["content"])
+        return {
+            "synthesis": synthesis,
+            "article_count": len(rows),
+            "articles": source_articles,
+        }
 
 
 # ---------------------------------------------------------------------------
