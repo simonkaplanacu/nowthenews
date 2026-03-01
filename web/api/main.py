@@ -393,12 +393,13 @@ def get_entity_ego(
 @app.get("/api/entity/{entity_name}/articles")
 def get_entity_articles(
     entity_name: str,
+    q: str | None = Query(None),
     time_from: str | None = Query(None),
     time_to: str | None = Query(None),
     limit: int = Query(50),
     offset: int = Query(0),
 ):
-    """Articles mentioning a specific entity (substring match)."""
+    """Articles mentioning a specific entity (substring match). Optional q for text search filter."""
     ch = _get_ch()
     time_clause, params = _time_filter("a", time_from, time_to)
 
@@ -410,6 +411,17 @@ def get_entity_articles(
     params["ename"] = entity_name.lower()
     if time_clause:
         where_parts.append(time_clause)
+
+    # Additional text search filter (e.g. from word cloud active search)
+    if q:
+        for i, word in enumerate(q.strip().split()):
+            key = f"tq{i}"
+            params[key] = word
+            where_parts.append(
+                f"(positionCaseInsensitive(a.body_text, %({key})s) > 0"
+                f" OR positionCaseInsensitive(a.title, %({key})s) > 0"
+                f" OR positionCaseInsensitive(a.headline, %({key})s) > 0)"
+            )
 
     where = " AND ".join(where_parts)
     params["limit"] = limit
@@ -1189,28 +1201,66 @@ _STOP_WORDS = {
 }
 
 
+def _search_subquery(q: str, time_from: str | None, time_to: str | None) -> tuple[str, dict] | None:
+    """Build a subquery SQL + params for article IDs matching text search. Returns None if no query."""
+    if not q:
+        return None
+    words = [w for part in q.split(",") for w in part.strip().split() if w]
+    if not words:
+        return None
+
+    params: dict = {}
+    where_parts: list[str] = []
+    for i, word in enumerate(words):
+        key = f"sq{i}"
+        params[key] = word
+        where_parts.append(
+            f"(positionCaseInsensitive(a.body_text, %({key})s) > 0"
+            f" OR positionCaseInsensitive(a.title, %({key})s) > 0"
+            f" OR positionCaseInsensitive(a.headline, %({key})s) > 0)"
+        )
+    time_clause, time_params = _time_filter("a", time_from, time_to)
+    params.update(time_params)
+    if time_clause:
+        where_parts.append(time_clause)
+
+    where = " AND ".join(where_parts)
+    sql = f"SELECT a.article_id FROM {_DB}.articles a FINAL WHERE {where} LIMIT 5000"
+    return sql, params
+
+
 @app.get("/api/word-cloud/entities")
 def word_cloud_entities(
+    q: str | None = Query(None),
     time_from: str | None = Query(None),
     time_to: str | None = Query(None),
     limit: int = Query(150),
 ):
-    """Top entities sized by article count."""
+    """Top entities sized by article count. Optional q param filters articles first."""
     ch = _get_ch()
-    time_clause, params = _time_filter("a", time_from, time_to)
-    params["pv"] = _PROMPT_VERSION
-    params["limit"] = limit
+    params: dict = {"pv": _PROMPT_VERSION, "limit": limit}
 
-    where = f"e.prompt_version = %(pv)s"
-    if time_clause:
-        where += f" AND {time_clause}"
+    sq = _search_subquery(q or "", time_from, time_to)
+
+    where = "e.prompt_version = %(pv)s"
+    articles_join = ""
+    if sq is not None:
+        sub_sql, sub_params = sq
+        params.update(sub_params)
+        where += f" AND e.article_id IN ({sub_sql})"
+    else:
+        time_clause, time_params = _time_filter("a", time_from, time_to)
+        params.update(time_params)
+        if time_clause:
+            where += f" AND {time_clause}"
+            articles_join = f"INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id"
 
     rows = ch.query(f"""
         SELECT lower(ent_name) AS name, ent_type AS type,
                count(DISTINCT e.article_id) AS count
         FROM {_DB}.article_enrichment e FINAL
         ARRAY JOIN e.`entities.name` AS ent_name, e.`entities.type` AS ent_type
-        INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id
+        {articles_join}
         WHERE {where}
         GROUP BY name, type
         HAVING count >= 2
@@ -1222,23 +1272,34 @@ def word_cloud_entities(
 
 @app.get("/api/word-cloud/tags")
 def word_cloud_tags(
+    q: str | None = Query(None),
     time_from: str | None = Query(None),
     time_to: str | None = Query(None),
     limit: int = Query(150),
 ):
     """Top Guardian keyword tags sized by article count."""
     ch = _get_ch()
-    time_clause, params = _time_filter("a", time_from, time_to)
-    params["limit"] = limit
+    params: dict = {"limit": limit}
+
+    sq = _search_subquery(q or "", time_from, time_to)
 
     where = "t.tag_type = 'keyword'"
-    if time_clause:
-        where += f" AND {time_clause}"
+    articles_join = ""
+    if sq is not None:
+        sub_sql, sub_params = sq
+        params.update(sub_params)
+        where += f" AND t.article_id IN ({sub_sql})"
+    else:
+        time_clause, time_params = _time_filter("a", time_from, time_to)
+        params.update(time_params)
+        if time_clause:
+            where += f" AND {time_clause}"
+            articles_join = f"INNER JOIN {_DB}.articles a FINAL ON a.article_id = t.article_id"
 
     rows = ch.query(f"""
         SELECT t.tag_title AS text, count(DISTINCT t.article_id) AS count
         FROM {_DB}.article_tags t
-        INNER JOIN {_DB}.articles a FINAL ON a.article_id = t.article_id
+        {articles_join}
         WHERE {where}
         GROUP BY text
         HAVING count >= 2
@@ -1250,25 +1311,35 @@ def word_cloud_tags(
 
 @app.get("/api/word-cloud/smoke-terms")
 def word_cloud_smoke_terms(
+    q: str | None = Query(None),
     time_from: str | None = Query(None),
     time_to: str | None = Query(None),
     limit: int = Query(150),
 ):
     """Top smoke/framing terms sized by occurrence count."""
     ch = _get_ch()
-    time_clause, params = _time_filter("a", time_from, time_to)
-    params["pv"] = _PROMPT_VERSION
-    params["limit"] = limit
+    params: dict = {"pv": _PROMPT_VERSION, "limit": limit}
 
-    where = f"e.prompt_version = %(pv)s"
-    if time_clause:
-        where += f" AND {time_clause}"
+    sq = _search_subquery(q or "", time_from, time_to)
+
+    where = "e.prompt_version = %(pv)s"
+    articles_join = ""
+    if sq is not None:
+        sub_sql, sub_params = sq
+        params.update(sub_params)
+        where += f" AND e.article_id IN ({sub_sql})"
+    else:
+        time_clause, time_params = _time_filter("a", time_from, time_to)
+        params.update(time_params)
+        if time_clause:
+            where += f" AND {time_clause}"
+            articles_join = f"INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id"
 
     rows = ch.query(f"""
         SELECT lower(term) AS text, count() AS count
         FROM {_DB}.article_enrichment e FINAL
         ARRAY JOIN e.`smoke_terms.term` AS term
-        INNER JOIN {_DB}.articles a FINAL ON a.article_id = e.article_id
+        {articles_join}
         WHERE {where}
         GROUP BY text
         HAVING count >= 2
@@ -1280,18 +1351,25 @@ def word_cloud_smoke_terms(
 
 @app.get("/api/word-cloud/headlines")
 def word_cloud_headlines(
+    q: str | None = Query(None),
     time_from: str | None = Query(None),
     time_to: str | None = Query(None),
     limit: int = Query(150),
 ):
     """Word frequency from article headlines (stop words removed)."""
     ch = _get_ch()
-    time_clause, params = _time_filter("a", time_from, time_to)
-    params["limit"] = limit
+    params: dict = {"limit": limit}
 
-    where = "1=1"
-    if time_clause:
-        where = time_clause
+    sq = _search_subquery(q or "", time_from, time_to)
+
+    if sq is not None:
+        sub_sql, sub_params = sq
+        params.update(sub_params)
+        where = f"a.article_id IN ({sub_sql})"
+    else:
+        time_clause, time_params = _time_filter("a", time_from, time_to)
+        params.update(time_params)
+        where = time_clause if time_clause else "1=1"
 
     rows = ch.query(f"""
         SELECT word, count() AS count
@@ -1304,7 +1382,7 @@ def word_cloud_headlines(
         )
         WHERE length(word) >= 3
         GROUP BY word
-        HAVING count >= 3
+        HAVING count >= 2
         ORDER BY count DESC
         LIMIT %(limit)s
     """, parameters=params).result_rows

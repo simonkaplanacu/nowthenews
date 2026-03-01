@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useFilters } from "../context/FilterContext";
 import type { WordCloudItem, Article } from "../api/client";
 import {
@@ -9,6 +9,7 @@ import {
   fetchTextSearch,
   fetchEntityArticles,
 } from "../api/client";
+import cloud from "d3-cloud";
 
 type Source = "entities" | "tags" | "smoke" | "headlines";
 
@@ -45,27 +46,37 @@ function wordColor(item: WordCloudItem, source: Source): string {
   return "#4fc3f7";
 }
 
-function computeFontSize(count: number, maxCount: number, minCount: number): number {
-  if (maxCount === minCount) return 24;
-  const ratio = (count - minCount) / (maxCount - minCount);
-  // Scale from 12px to 56px
-  return Math.round(12 + ratio * 44);
+interface LayoutWord {
+  text: string;
+  size: number;
+  x: number;
+  y: number;
+  rotate: number;
+  color: string;
+  count: number;
+  type?: string;
 }
 
 export default function WordCloudView() {
   const { timeFrom, timeTo } = useFilters();
   const [source, setSource] = useState<Source>("entities");
   const [words, setWords] = useState<WordCloudItem[]>([]);
+  const [layoutWords, setLayoutWords] = useState<LayoutWord[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [articles, setArticles] = useState<Article[]>([]);
   const [articlesLoading, setArticlesLoading] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [activeSearch, setActiveSearch] = useState("");
+  const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const loadWords = useCallback(() => {
     setLoading(true);
     setSelected(null);
     setArticles([]);
     const filters = {
+      q: activeSearch || undefined,
       time_from: timeFrom || undefined,
       time_to: timeTo || undefined,
       limit: 150,
@@ -80,9 +91,66 @@ export default function WordCloudView() {
       .then(setWords)
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [source, timeFrom, timeTo]);
+  }, [source, timeFrom, timeTo, activeSearch]);
 
   useEffect(() => { loadWords(); }, [loadWords]);
+
+  // Run d3-cloud layout when words or container size changes
+  useEffect(() => {
+    if (words.length === 0 || !containerRef.current) {
+      setLayoutWords([]);
+      return;
+    }
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const width = rect.width || 800;
+    const height = rect.height || 500;
+
+    const maxCount = words[0].count;
+    const minCount = words[words.length - 1].count;
+    const range = maxCount - minCount || 1;
+
+    // Scale font sizes based on container area
+    const area = width * height;
+    const scaleFactor = Math.sqrt(area) / 40;
+    const minFont = Math.max(10, scaleFactor * 0.3);
+    const maxFont = Math.min(72, scaleFactor * 1.5);
+
+    const colorMap = new Map<string, string>();
+    words.forEach((w) => colorMap.set(w.text, wordColor(w, source)));
+
+    const layout = cloud()
+      .size([width, height])
+      .words(
+        words.map((w) => ({
+          text: w.text,
+          size: minFont + ((w.count - minCount) / range) * (maxFont - minFont),
+          count: w.count,
+          type: w.type,
+        }))
+      )
+      .padding(4)
+      .rotate(() => (Math.random() > 0.7 ? 90 : 0))
+      .font("system-ui, -apple-system, sans-serif")
+      .fontSize((d: any) => d.size)
+      .spiral("archimedean")
+      .on("end", (output: any[]) => {
+        setLayoutWords(
+          output.map((d) => ({
+            text: d.text!,
+            size: d.size!,
+            x: d.x!,
+            y: d.y!,
+            rotate: d.rotate!,
+            color: colorMap.get(d.text!) || "#4fc3f7",
+            count: d.count,
+            type: d.type,
+          }))
+        );
+      });
+
+    layout.start();
+  }, [words, source]);
 
   const handleWordClick = (word: string) => {
     setSelected(word);
@@ -93,59 +161,106 @@ export default function WordCloudView() {
       limit: 30,
     };
     if (source === "entities") {
-      fetchEntityArticles(word, filters)
+      fetchEntityArticles(word, { ...filters, q: activeSearch || undefined })
         .then(setArticles)
         .catch(console.error)
         .finally(() => setArticlesLoading(false));
     } else {
-      fetchTextSearch(word, filters)
+      // Combine active search + clicked word for text search
+      const combined = activeSearch ? `${activeSearch} ${word}` : word;
+      fetchTextSearch(combined, filters)
         .then(setArticles)
         .catch(console.error)
         .finally(() => setArticlesLoading(false));
     }
   };
 
-  const maxCount = words.length > 0 ? words[0].count : 1;
-  const minCount = words.length > 0 ? words[words.length - 1].count : 1;
+  const handleSearch = () => {
+    setActiveSearch(searchInput.trim());
+  };
+
+  const handleClearSearch = () => {
+    setSearchInput("");
+    setActiveSearch("");
+  };
 
   return (
     <div className="wordcloud-view">
       <div className="wordcloud-tabs">
-        {(Object.keys(SOURCE_LABELS) as Source[]).map((s) => (
-          <button
-            key={s}
-            className={`wordcloud-tab ${source === s ? "active" : ""}`}
-            onClick={() => setSource(s)}
-          >
-            {SOURCE_LABELS[s]}
-          </button>
-        ))}
+        <div className="wordcloud-search-group">
+          <input
+            className="wordcloud-search-input"
+            placeholder="Search articles, then cloud their words..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+          />
+          <button className="search-btn" onClick={handleSearch}>Search</button>
+          {activeSearch && (
+            <button className="wordcloud-clear-btn" onClick={handleClearSearch} title="Clear search">
+              x
+            </button>
+          )}
+        </div>
+        <div className="wordcloud-source-tabs">
+          {(Object.keys(SOURCE_LABELS) as Source[]).map((s) => (
+            <button
+              key={s}
+              className={`wordcloud-tab ${source === s ? "active" : ""}`}
+              onClick={() => setSource(s)}
+            >
+              {SOURCE_LABELS[s]}
+            </button>
+          ))}
+        </div>
         <span className="wordcloud-count">
-          {words.length} words
+          {layoutWords.length} words
+          {activeSearch && <span className="wordcloud-search-pill">{activeSearch}</span>}
         </span>
       </div>
 
       <div className="wordcloud-body">
-        <div className={`wordcloud-cloud ${selected ? "cloud-with-panel" : ""}`}>
+        <div
+          ref={containerRef}
+          className={`wordcloud-cloud ${selected ? "cloud-with-panel" : ""}`}
+        >
           {loading && <div className="loading-msg">Loading...</div>}
           {!loading && words.length === 0 && (
             <div className="loading-msg">No data for this time range</div>
           )}
-          {!loading && words.map((w) => (
-            <span
-              key={w.text + (w.type || "")}
-              className={`cloud-word ${selected === w.text ? "cloud-word-selected" : ""}`}
-              style={{
-                fontSize: computeFontSize(w.count, maxCount, minCount),
-                color: wordColor(w, source),
-                opacity: selected && selected !== w.text ? 0.3 : 1,
-              }}
-              onClick={() => handleWordClick(w.text)}
-              title={`${w.text}: ${w.count}${w.type ? ` (${w.type})` : ""}`}
+          {!loading && layoutWords.length > 0 && (
+            <svg
+              ref={svgRef}
+              className="wordcloud-svg"
+              width="100%"
+              height="100%"
+              viewBox={containerRef.current
+                ? `${-containerRef.current.getBoundingClientRect().width / 2} ${-containerRef.current.getBoundingClientRect().height / 2} ${containerRef.current.getBoundingClientRect().width} ${containerRef.current.getBoundingClientRect().height}`
+                : "-400 -250 800 500"
+              }
             >
-              {w.text}
-            </span>
-          ))}
+              {layoutWords.map((w) => (
+                <text
+                  key={w.text + (w.type || "")}
+                  className="cloud-word-svg"
+                  textAnchor="middle"
+                  transform={`translate(${w.x},${w.y}) rotate(${w.rotate})`}
+                  style={{
+                    fontSize: w.size,
+                    fill: w.color,
+                    opacity: selected && selected !== w.text ? 0.2 : 1,
+                    cursor: "pointer",
+                    fontWeight: w.size > 30 ? 600 : 400,
+                    fontFamily: "system-ui, -apple-system, sans-serif",
+                  }}
+                  onClick={() => handleWordClick(w.text)}
+                >
+                  <title>{`${w.text}: ${w.count}${w.type ? ` (${w.type})` : ""}`}</title>
+                  {w.text}
+                </text>
+              ))}
+            </svg>
+          )}
         </div>
 
         {selected && (
@@ -153,7 +268,7 @@ export default function WordCloudView() {
             <div className="panel-header">
               <h2>{selected}</h2>
               <button className="close-btn" onClick={() => { setSelected(null); setArticles([]); }}>
-                ×
+                x
               </button>
             </div>
             <div className="panel-body">

@@ -95,7 +95,7 @@ export function fetchEntityGraph(filters: Filters & { limit?: number }) {
   return get<GraphData>("/api/entity-graph", { ...filters });
 }
 
-export function fetchEntityArticles(name: string, filters?: Filters) {
+export function fetchEntityArticles(name: string, filters?: Filters & { q?: string }) {
   return get<Article[]>(`/api/entity/${encodeURIComponent(name)}/articles`, filters ? { ...filters } : undefined);
 }
 
@@ -278,19 +278,21 @@ export interface WordCloudItem {
   type?: string;  // entity type (entities source only)
 }
 
-export function fetchWordCloudEntities(filters?: { time_from?: string; time_to?: string; limit?: number }) {
+type WordCloudFilters = { q?: string; time_from?: string; time_to?: string; limit?: number };
+
+export function fetchWordCloudEntities(filters?: WordCloudFilters) {
   return get<WordCloudItem[]>("/api/word-cloud/entities", filters);
 }
 
-export function fetchWordCloudTags(filters?: { time_from?: string; time_to?: string; limit?: number }) {
+export function fetchWordCloudTags(filters?: WordCloudFilters) {
   return get<WordCloudItem[]>("/api/word-cloud/tags", filters);
 }
 
-export function fetchWordCloudSmokeTerms(filters?: { time_from?: string; time_to?: string; limit?: number }) {
+export function fetchWordCloudSmokeTerms(filters?: WordCloudFilters) {
   return get<WordCloudItem[]>("/api/word-cloud/smoke-terms", filters);
 }
 
-export function fetchWordCloudHeadlines(filters?: { time_from?: string; time_to?: string; limit?: number }) {
+export function fetchWordCloudHeadlines(filters?: WordCloudFilters) {
   return get<WordCloudItem[]>("/api/word-cloud/headlines", filters);
 }
 
