@@ -179,8 +179,8 @@ export default function WordCloudView() {
         .catch(console.error)
         .finally(() => setArticlesLoading(false));
     } else {
-      // Combine active search + clicked word for text search
-      const combined = activeSearch ? `${activeSearch}, ${word}` : word;
+      // Combine active search + clicked word for text search (space = AND)
+      const combined = activeSearch ? `${activeSearch} ${word}` : word;
       fetchTextSearch(combined, filters)
         .then(setArticles)
         .catch(console.error)
@@ -235,7 +235,7 @@ export default function WordCloudView() {
         <div className="wordcloud-search-group">
           <input
             className="wordcloud-search-input"
-            placeholder="Search phrases, comma-separated..."
+            placeholder="(A | B) topic:environment ..."
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}

@@ -413,21 +413,13 @@ def get_entity_articles(
     if time_clause:
         where_parts.append(time_clause)
 
-    # Additional text search filter (e.g. from word cloud active search)
-    # Comma-separated phrases are ORed (match any phrase)
+    # Additional search filter (e.g. from word cloud active search)
+    # Supports: phrases, OR (| or ,), parenthesized groups, topic:X
     if q:
-        phrases = [p.strip() for p in q.split(",") if p.strip()]
-        phrase_clauses: list[str] = []
-        for i, phrase in enumerate(phrases):
-            key = f"tq{i}"
-            params[key] = phrase
-            phrase_clauses.append(
-                f"(positionCaseInsensitive(a.body_text, %({key})s) > 0"
-                f" OR positionCaseInsensitive(a.title, %({key})s) > 0"
-                f" OR positionCaseInsensitive(a.headline, %({key})s) > 0)"
-            )
-        if phrase_clauses:
-            where_parts.append(f"({' OR '.join(phrase_clauses)})")
+        parsed = _parse_search(q)
+        extra_parts, extra_params = _search_sql_from_parsed(parsed, prefix="tq")
+        params.update(extra_params)
+        where_parts.extend(extra_parts)
 
     where = " AND ".join(where_parts)
     params["limit"] = limit
@@ -1207,40 +1199,110 @@ _STOP_WORDS = {
 }
 
 
-def _search_subquery(q: str, time_from: str | None, time_to: str | None) -> tuple[str, dict] | None:
-    """Build a subquery SQL + params for article IDs matching text search.
+def _parse_search(q: str) -> dict:
+    """Parse search query with simple syntax.
 
-    Comma-separated phrases are ORed (match any phrase).
-    Each phrase is matched as a whole string against body, title, headline.
+    Syntax:
+      bare text            → AND text phrase
+      A | B  or  A, B      → OR between phrases
+      (A | B)              → grouped OR
+      topic:X              → filter by LLM topic
+      Multiple groups      → AND between groups
+
+    Returns: {"text_clauses": [...], "topics": [...]}
+    Each text_clause is a list of phrases (OR within, AND between clauses).
+    """
+    remaining = q.strip()
+    if not remaining:
+        return {"text_clauses": [], "topics": []}
+
+    topics: list[str] = []
+    text_clauses: list[list[str]] = []  # list of OR-groups, AND'd together
+
+    # 1. Extract topic: filters
+    for m in re.finditer(r"topic:(\S+)", remaining):
+        raw = m.group(1).strip("(),")
+        topics.append(raw.replace("_", " ").lower())
+    remaining = re.sub(r"topic:\S+", "", remaining).strip()
+
+    # 2. Extract parenthesized OR groups: (A | B, C)
+    for m in re.finditer(r"\(([^)]+)\)", remaining):
+        inner = m.group(1)
+        phrases = [p.strip() for p in re.split(r"[|,]", inner) if p.strip()]
+        if phrases:
+            text_clauses.append(phrases)
+    remaining = re.sub(r"\([^)]+\)", "", remaining).strip()
+
+    # 3. Remaining text
+    if remaining:
+        if "|" in remaining or "," in remaining:
+            # OR group
+            phrases = [p.strip() for p in re.split(r"[|,]", remaining) if p.strip()]
+            if phrases:
+                text_clauses.append(phrases)
+        elif remaining.strip():
+            # Single AND phrase
+            text_clauses.append([remaining.strip()])
+
+    return {"text_clauses": text_clauses, "topics": topics}
+
+
+def _search_sql_from_parsed(parsed: dict, prefix: str = "sq") -> tuple[list[str], dict]:
+    """Convert parsed search into SQL WHERE clauses + params.
+
+    Returns (where_parts, params) where where_parts are AND'd together.
+    """
+    where_parts: list[str] = []
+    params: dict = {}
+    idx = 0
+
+    for clause in parsed["text_clauses"]:
+        # Each clause is a list of phrases OR'd together
+        or_parts: list[str] = []
+        for phrase in clause:
+            key = f"{prefix}{idx}"
+            params[key] = phrase
+            or_parts.append(
+                f"(positionCaseInsensitive(a.body_text, %({key})s) > 0"
+                f" OR positionCaseInsensitive(a.title, %({key})s) > 0"
+                f" OR positionCaseInsensitive(a.headline, %({key})s) > 0)"
+            )
+            idx += 1
+        if len(or_parts) == 1:
+            where_parts.append(or_parts[0])
+        else:
+            where_parts.append(f"({' OR '.join(or_parts)})")
+
+    for i, topic in enumerate(parsed["topics"]):
+        key = f"{prefix}t{i}"
+        params[key] = topic
+        where_parts.append(
+            f"a.article_id IN (SELECT article_id FROM {_DB}.article_topics WHERE lower(topic) = %({key})s)"
+        )
+
+    return where_parts, params
+
+
+def _search_subquery(q: str, time_from: str | None, time_to: str | None) -> tuple[str, dict] | None:
+    """Build a subquery SQL + params for article IDs matching search query.
+
+    Supports: phrases, OR (| or ,), parenthesized groups, topic:X filters.
     Returns None if no query.
     """
     if not q:
         return None
-    phrases = [p.strip() for p in q.split(",") if p.strip()]
-    if not phrases:
+    parsed = _parse_search(q)
+    if not parsed["text_clauses"] and not parsed["topics"]:
         return None
 
-    params: dict = {}
-    phrase_clauses: list[str] = []
-    for i, phrase in enumerate(phrases):
-        key = f"sq{i}"
-        params[key] = phrase
-        phrase_clauses.append(
-            f"(positionCaseInsensitive(a.body_text, %({key})s) > 0"
-            f" OR positionCaseInsensitive(a.title, %({key})s) > 0"
-            f" OR positionCaseInsensitive(a.headline, %({key})s) > 0)"
-        )
+    search_parts, params = _search_sql_from_parsed(parsed)
 
-    # OR the phrases together (match any)
-    search_clause = " OR ".join(phrase_clauses)
-
-    where_parts: list[str] = [f"({search_clause})"]
     time_clause, time_params = _time_filter("a", time_from, time_to)
     params.update(time_params)
     if time_clause:
-        where_parts.append(time_clause)
+        search_parts.append(time_clause)
 
-    where = " AND ".join(where_parts)
+    where = " AND ".join(search_parts) if search_parts else "1=1"
     sql = f"SELECT a.article_id FROM {_DB}.articles a FINAL WHERE {where} LIMIT 5000"
     return sql, params
 
